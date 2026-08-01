@@ -1,0 +1,85 @@
+name: document-search-platform
+
+services:
+
+  # MongoDB — source of truth for documents.
+  #
+  # Pinned to 7.0.x on purpose. MongoDB 8.x bundles a TCMalloc that violates the
+  # rseq ABI enforced by Linux kernel 6.19+, which segfaults mongod ~30-60s after
+  # startup (SERVER-121912). 8.0.28 and 8.3.x detect this and refuse to boot;
+  # 8.2.x predates the guard and crashes silently, which is worse. 7.0.x bundles
+  # an older TCMalloc and is unaffected.
+  #
+  # Revisit once an 8.x release ships the TCMalloc upgrade (SERVER-125742).
+  mongodb:
+    image: mongo:7.0.39
+    container_name: dsp-mongodb
+    restart: unless-stopped
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-change-me}
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-documents}
+    volumes:
+      - mongodb-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  # OpenSearch — search index. Single node, security plugin off for local dev.
+  opensearch:
+    image: opensearchproject/opensearch:3.7.0
+    container_name: dsp-opensearch
+    restart: unless-stopped
+    environment:
+      - cluster.name=dsp-cluster
+      - node.name=dsp-node-1
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - OPENSEARCH_JAVA_OPTS=${OPENSEARCH_JAVA_OPTS:--Xms512m -Xmx512m}
+      # Local development only. Exposes plain HTTP on 9200 with no auth so we can
+      # focus on mappings and Query DSL. Day 10 introduces the secured, AWS-ready setup.
+      - DISABLE_SECURITY_PLUGIN=true
+      - DISABLE_INSTALL_DEMO_CONFIG=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "${OPENSEARCH_PORT:-9200}:9200"
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 40s
+
+  # OpenSearch Dashboards — optional. Its Dev Tools console is the fastest way to
+  # experiment with mappings, analyzers and Query DSL by hand.
+  #     docker compose --profile tools up -d
+  opensearch-dashboards:
+    image: opensearchproject/opensearch-dashboards:3.7.0
+    container_name: dsp-opensearch-dashboards
+    profiles: ["tools"]
+    restart: unless-stopped
+    ports:
+      - "${DASHBOARDS_PORT:-5601}:5601"
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    depends_on:
+      opensearch:
+        condition: service_healthy
+
+volumes:
+  mongodb-data:
+  opensearch-data:

@@ -1,0 +1,33 @@
+# --- Maven ---
+# The wrapper uses distributionType=only-script, so there is no jar to ignore.
+# .mvn/ and mvnw are committed intentionally.
+target/
+.mvn/timing.properties
+
+# --- Environment ---
+# .env holds real credentials; commit .env.example instead
+.env
+
+# --- IDE ---
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.classpath
+.project
+.settings/
+bin/
+nbproject/
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Local tooling artifacts (not part of the project) ---
+graphify-out/
+codedb.snapshot
