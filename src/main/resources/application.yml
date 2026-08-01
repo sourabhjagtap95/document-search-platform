@@ -2,6 +2,13 @@ spring:
   application:
     name: document-search-platform
 
+# Bound to com.docsearch.config.ApplicationProperties.
+# @project.version@ is substituted by Maven resource filtering at build time.
+app:
+  name: Document Search Platform
+  version: '@project.version@'
+  description: Document search over MongoDB and OpenSearch
+
 server:
   port: ${SERVER_PORT:8080}
 
@@ -13,6 +20,9 @@ management:
   endpoint:
     health:
       show-details: always
+  info:
+    env:
+      enabled: true
 
 springdoc:
   api-docs:
@@ -29,5 +39,9 @@ springdoc:
   show-actuator: false
 
 logging:
+  # Puts the correlation id from CorrelationIdFilter on every log line.
+  pattern:
+    correlation: "[%X{correlationId:-}] "
+  include-application-name: false
   level:
     com.docsearch: DEBUG

@@ -1,0 +1,20 @@
+# Keep the build context small and avoid invalidating layers on local churn.
+target/
+.git/
+.github/
+.idea/
+.vscode/
+*.iml
+
+.env
+*.log
+logs/
+
+# Local tooling artifacts
+graphify-out/
+codedb.snapshot
+
+README.md
+docker-compose.yml
+Dockerfile
+.dockerignore
