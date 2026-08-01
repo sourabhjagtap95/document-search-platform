@@ -80,6 +80,26 @@ services:
       opensearch:
         condition: service_healthy
 
+  # The application itself, containerised. Opt-in so the normal dev loop stays
+  # ./mvnw spring-boot:run against the two datastores above.
+  #     docker compose --profile app up -d --build
+  app:
+    build:
+      context: .
+    image: document-search-platform:0.1.0-SNAPSHOT
+    container_name: dsp-app
+    profiles: ["app"]
+    restart: unless-stopped
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    environment:
+      SERVER_PORT: 8080
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      opensearch:
+        condition: service_healthy
+
 volumes:
   mongodb-data:
   opensearch-data:

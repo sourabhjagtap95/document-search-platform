@@ -1,23 +1,30 @@
 package com.docsearch.api;
 
 import com.docsearch.api.dto.HealthResponse;
-import org.springframework.beans.factory.annotation.Value;
+import com.docsearch.config.ApplicationProperties;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.lang.management.ManagementFactory;
+import java.time.Duration;
 
 @RestController
 @RequestMapping("/api/v1")
 public class HealthController {
 
-    private final String applicationName;
+    private final ApplicationProperties properties;
 
-    public HealthController(@Value("${spring.application.name}") String applicationName) {
-        this.applicationName = applicationName;
+    public HealthController(ApplicationProperties properties) {
+        this.properties = properties;
     }
 
     @GetMapping("/health")
     public HealthResponse health() {
-        return HealthResponse.up(applicationName);
+        return HealthResponse.up(properties.name(), properties.version(), jvmUptime());
+    }
+
+    private Duration jvmUptime() {
+        return Duration.ofMillis(ManagementFactory.getRuntimeMXBean().getUptime());
     }
 }
