@@ -21,7 +21,8 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 - Docker Compose stack: MongoDB + OpenSearch (+ optional Dashboards)
 - `application.yml` with actuator exposure and log levels
 - `GET /api/v1/health` endpoint
-- 2 passing tests (context load + MockMvc slice)
+- OpenAPI 3.1 spec and Swagger UI via springdoc
+- 7 passing tests (context load, MockMvc slice, generated-spec assertions)
 
 ### Not yet built
 
@@ -64,13 +65,16 @@ exists today. The layering above is the target shape.
     ├── main
     │   ├── java/com/docsearch
     │   │   ├── DocumentSearchApplication.java
-    │   │   └── api
-    │   │       ├── HealthController.java
-    │   │       └── dto/HealthResponse.java
+    │   │   ├── api
+    │   │   │   ├── HealthController.java
+    │   │   │   └── dto/HealthResponse.java
+    │   │   └── config/OpenApiConfig.java
     │   └── resources/application.yml
     └── test/java/com/docsearch
         ├── DocumentSearchApplicationTests.java
-        └── api/HealthControllerTest.java
+        └── api
+            ├── HealthControllerTest.java
+            └── OpenApiDocumentationTest.java
 ```
 
 ---
@@ -126,6 +130,10 @@ Expected from the first call:
 }
 ```
 
+Then open the interactive API docs:
+
+**<http://localhost:8080/swagger-ui.html>**
+
 ### 5. Build and test
 
 ```bash
@@ -143,15 +151,50 @@ docker compose down -v     # also drop volumes
 
 ## APIs
 
-| Method | Path               | Description                                  |
-|--------|--------------------|----------------------------------------------|
-| `GET`  | `/api/v1/health`   | Application liveness + name + timestamp      |
-| `GET`  | `/actuator/health` | Spring Boot health, including dependencies   |
-| `GET`  | `/actuator/info`   | Build and environment info                   |
+| Method | Path                 | Description                                  |
+|--------|----------------------|----------------------------------------------|
+| `GET`  | `/api/v1/health`     | Application liveness + name + timestamp      |
+| `GET`  | `/actuator/health`   | Spring Boot health, including dependencies   |
+| `GET`  | `/actuator/info`     | Build and environment info                   |
+| `GET`  | `/swagger-ui.html`   | Interactive API documentation (Swagger UI)   |
+| `GET`  | `/v3/api-docs`       | OpenAPI 3.1 document (JSON)                  |
+| `GET`  | `/v3/api-docs.yaml`  | OpenAPI 3.1 document (YAML)                  |
 
 `/api/v1/health` answers "is the app serving requests?". `/actuator/health`
 additionally reports on infrastructure the app depends on — as datastores are
 wired in on later days, they will surface there automatically.
+
+### API documentation
+
+The OpenAPI document is **generated from the controllers at runtime**, so paths,
+schemas and response shapes cannot drift from the code. Only the document-level
+title and description are hand-written, in `config/OpenApiConfig.java`.
+
+```bash
+curl localhost:8080/v3/api-docs | jq .          # machine-readable spec
+open http://localhost:8080/swagger-ui.html      # browse and try requests
+```
+
+Notes on how it is set up:
+
+- **`info.version` is `v1`, not the build version.** It describes the API
+  contract; the jar can be rebuilt many times without the contract changing.
+- **The server URL is relative (`/`)**, so the spec stays correct behind a
+  reverse proxy or on a different host.
+- **Actuator endpoints are excluded** (`springdoc.show-actuator: false`) — they
+  are operational, not part of the public API contract.
+- **Turn it off in production** with `SPRINGDOC_ENABLED=false`, which disables
+  both the spec endpoint and the UI. Day 10 wires this into the production
+  profile; leaving Swagger UI publicly reachable advertises your whole API
+  surface.
+- `OpenApiDocumentationTest` asserts the generated document — title, version, the
+  health path, its response `$ref`, and the actuator exclusion — so a bad
+  springdoc upgrade fails the build instead of silently producing an empty spec.
+
+**Version note:** this uses **springdoc 3.x**, which is the Spring Boot 4 /
+Spring Framework 7 line. The much more widely documented springdoc **2.x**
+targets Boot 3 and will not work here — most tutorials you find will show 2.x
+coordinates.
 
 ---
 
@@ -210,20 +253,22 @@ runs with zero configuration locally and is container/AWS friendly.
 | `OPENSEARCH_PORT`      | `9200`             | Compose     |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms512m -Xmx512m`| Compose     |
 | `DASHBOARDS_PORT`      | `5601`             | Compose     |
+| `SPRINGDOC_ENABLED`    | `true`             | Spring Boot |
 
 ---
 
 ## Tech stack
 
-| Concern      | Choice                        |
-|--------------|-------------------------------|
-| Language     | Java 21                       |
-| Framework    | Spring Boot 4.1.0 (Spring 7)  |
-| Build        | Maven (wrapper included)      |
-| Datastore    | MongoDB 7.0                   |
-| Search       | OpenSearch 3.7                |
-| Testing      | JUnit 5, Mockito, MockMvc     |
-| Runtime      | Docker + Docker Compose       |
+| Concern      | Choice                          |
+|--------------|---------------------------------|
+| Language     | Java 21                         |
+| Framework    | Spring Boot 4.1.0 (Spring 7)    |
+| Build        | Maven (wrapper included)        |
+| Datastore    | MongoDB 7.0                     |
+| Search       | OpenSearch 3.7                  |
+| API docs     | springdoc-openapi 3.0.3 / OAS 3.1 |
+| Testing      | JUnit 5, Mockito, MockMvc       |
+| Runtime      | Docker + Docker Compose         |
 
 > **Note on Spring Boot 4:** test slices were split out of
 > `spring-boot-starter-test` into per-technology modules. `@WebMvcTest` now comes

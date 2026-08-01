@@ -14,6 +14,20 @@ management:
     health:
       show-details: always
 
+springdoc:
+  api-docs:
+    # OpenAPI 3 document (JSON). YAML is served at the same path + .yaml
+    path: /v3/api-docs
+    enabled: ${SPRINGDOC_ENABLED:true}
+  swagger-ui:
+    path: /swagger-ui.html
+    enabled: ${SPRINGDOC_ENABLED:true}
+    operations-sorter: method
+    tags-sorter: alpha
+    display-request-duration: true
+  # Actuator endpoints are operational, not part of the public API contract.
+  show-actuator: false
+
 logging:
   level:
     com.docsearch: DEBUG
