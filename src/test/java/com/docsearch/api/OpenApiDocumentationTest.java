@@ -14,7 +14,10 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  * Guards the generated OpenAPI document. Without this, a broken springdoc upgrade
  * or a renamed path would only surface by someone opening Swagger UI by hand.
  */
-@SpringBootTest
+@SpringBootTest(properties = {
+        "opensearch.auto-create-index=false",
+        "app.sample-data.enabled=false"
+})
 @AutoConfigureMockMvc
 class OpenApiDocumentationTest {
 
