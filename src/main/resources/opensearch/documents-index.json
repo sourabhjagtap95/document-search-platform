@@ -1,0 +1,101 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "analysis": {
+      "char_filter": {
+        "strip_markup": {
+          "type": "html_strip"
+        }
+      },
+      "filter": {
+        "split_camel_case": {
+          "type": "word_delimiter_graph",
+          "split_on_case_change": true,
+          "split_on_numerics": true,
+          "generate_word_parts": true,
+          "generate_number_parts": true,
+          "preserve_original": true,
+          "stem_english_possessive": true
+        },
+        "english_stop": {
+          "type": "stop",
+          "stopwords": "_english_"
+        },
+        "english_stemmer": {
+          "type": "stemmer",
+          "language": "english"
+        }
+      },
+      "analyzer": {
+        "document_text": {
+          "type": "custom",
+          "char_filter": ["strip_markup"],
+          "tokenizer": "standard",
+          "filter": [
+            "split_camel_case",
+            "flatten_graph",
+            "apostrophe",
+            "lowercase",
+            "english_stop",
+            "english_stemmer"
+          ]
+        }
+      },
+      "normalizer": {
+        "lowercase_exact": {
+          "type": "custom",
+          "filter": ["lowercase"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "id": {
+        "type": "keyword",
+        "index": false
+      },
+      "title": {
+        "type": "text",
+        "analyzer": "document_text",
+        "fields": {
+          "keyword": {
+            "type": "keyword",
+            "ignore_above": 256
+          }
+        }
+      },
+      "content": {
+        "type": "text",
+        "analyzer": "document_text"
+      },
+      "author": {
+        "type": "keyword",
+        "fields": {
+          "text": {
+            "type": "text",
+            "analyzer": "standard"
+          }
+        }
+      },
+      "category": {
+        "type": "keyword",
+        "normalizer": "lowercase_exact"
+      },
+      "tags": {
+        "type": "keyword",
+        "normalizer": "lowercase_exact"
+      },
+      "createdAt": {
+        "type": "date"
+      },
+      "updatedAt": {
+        "type": "date"
+      }
+    }
+  }
+}

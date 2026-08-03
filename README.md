@@ -11,7 +11,7 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 
 ## Status
 
-**Day 2 of 10 complete** — document model, OpenSearch index, and CRUD.
+**Day 3 of 10 complete** — explicit mappings and text analysis.
 
 ### Completed
 
@@ -36,7 +36,19 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 - Full CRUD over the OpenSearch document APIs: index, get, `_update`, delete, bulk
 - `/api/v1/documents` REST endpoints, documented in Swagger UI
 - 10 sample documents seeded from `sample-documents.json`, only when the index is empty
-- 50 passing tests
+
+**Day 3 — mappings and analysis**
+
+- Explicit index definition in `opensearch/documents-index.json`: settings, custom
+  analyzer, and a mapped type for every field
+- `dynamic: strict` — an unmapped field is now a loud rejection, not a guessed type
+- `text` vs `keyword` decided per field rather than inferred
+- Custom `document_text` analyzer: markup stripping, camelCase splitting, apostrophe
+  cleanup, stop words and English stemming
+- Case-insensitive exact filtering on `category` and `tags` via a normalizer
+- `/api/v1/analyze` and `/api/v1/analyze/compare` to inspect tokenisation
+- Mapping drift is detected and reported at startup instead of silently ignored
+- 81 passing tests
 
 ### Not yet built
 
@@ -101,12 +113,14 @@ is a separate `DocumentEntity` for Mongo rather than one annotated class —
     │   │   ├── application              # use cases
     │   │   │   └── DocumentService.java
     │   │   ├── domain                   # framework-free core model
+    │   │   │   ├── AnalyzedToken.java
     │   │   │   └── SearchDocument.java
     │   │   ├── infrastructure
     │   │   │   ├── mongo
     │   │   │   │   └── DocumentEntity.java
     │   │   │   └── opensearch
     │   │   │       ├── DocumentIndexInitializer.java
+    │   │   │       ├── OpenSearchAnalyzer.java
     │   │   │       ├── OpenSearchDocumentRepository.java
     │   │   │       └── SampleDataLoader.java
     │   │   ├── config
@@ -118,6 +132,8 @@ is a separate `DocumentEntity` for Mongo rather than one annotated class —
     │   │   └── web/CorrelationIdFilter.java
     │   └── resources
     │       ├── application.yml
+    │       ├── opensearch
+    │       │   └── documents-index.json   # settings + explicit mappings
     │       └── sample-documents.json
     └── test
         ├── java/com/docsearch
@@ -225,6 +241,8 @@ docker compose down -v     # also drop volumes
 | `PUT`    | `/api/v1/documents/{id}`   | Replace all fields; `createdAt` preserved       |
 | `PATCH`  | `/api/v1/documents/{id}`   | Partial update via OpenSearch `_update`         |
 | `DELETE` | `/api/v1/documents/{id}`   | Delete; 204 on success, 404 when absent         |
+| `GET`    | `/api/v1/analyze`          | Tokens for a text (`?text=`, `?analyzer=`, `?field=`) |
+| `GET`    | `/api/v1/analyze/compare`  | The same text through six analyzers             |
 | `GET`    | `/api/v1/health`           | Status, application name, version, uptime       |
 | `GET`    | `/actuator/health`         | Spring Boot health, including dependencies      |
 | `GET`    | `/actuator/info`           | Build metadata — version, group, artifact, time |
@@ -441,6 +459,132 @@ Rules naming packages that do not exist yet pass vacuously — see
 layering is cheap to state now and expensive to retrofit once persistence and
 search land.
 
+## Mapping and analysis
+
+The index is defined by `src/main/resources/opensearch/documents-index.json` — the
+same JSON you would paste into Dev Tools, so it can be tried by hand before being
+committed. It is deserialized into the client's own types at startup, which means a
+typo fails against the typed model rather than being shipped to the cluster.
+
+### text vs keyword, field by field
+
+| Field | Type | Why |
+|---|---|---|
+| `title` | `text` + `.keyword` | Searched as prose; the sub-field exists only to sort on |
+| `content` | `text` | Searched as prose. **No** `.keyword` — nothing sorts or filters on a body of text |
+| `author` | `keyword` + `.text` | Grouping authors must be exact; `.text` still allows "documents by Nair" |
+| `category` | `keyword` + normalizer | Only ever filtered and counted, never searched as prose |
+| `tags` | `keyword` + normalizer | Same |
+| `createdAt` / `updatedAt` | `date` | Range queries and sorting |
+| `id` | `keyword`, `index: false` | Duplicates `_id`; kept in `_source`, never searched |
+
+**`text` is analyzed** into lowercase, stemmed tokens for flexible matching.
+**`keyword` is stored verbatim** for exact filters, sorting and aggregation. Choosing
+wrongly does not raise an error — it returns zero results, or quietly wrong counts.
+
+Day 2 let OpenSearch infer these, and it made every string `text` with a `.keyword`
+twin. That is wrong in both directions: `content` gained a `.keyword` nothing uses
+(which silently drops values over 256 characters), while `category` and `tags` became
+analyzed prose when they only need exact matching.
+
+### dynamic: strict
+
+An unmapped field is rejected outright:
+
+```json
+{ "type": "strict_dynamic_mapping_exception",
+  "reason": "mapping set to strict, dynamic introduction of [unexpectedField] within [_doc] is not allowed" }
+```
+
+Better a loud 400 at index time than a field nobody chose, typed by whatever the first
+document happened to contain.
+
+### The document_text analyzer
+
+```text
+char_filter  strip_markup        drop HTML so tags are not indexed as words
+tokenizer    standard            split on word boundaries
+filter       split_camel_case    "OpenSearch" -> opensearch + open + search
+             flatten_graph       required after a graph-producing filter, at index time
+             apostrophe          remove the apostrophe left by the possessive split
+             lowercase           case-insensitive matching
+             english_stop        drop "is", "a", "the"
+             english_stemmer     "engines"/"engine" -> "engin"
+```
+
+Order is load-bearing, and two of these are easy to get wrong:
+
+- **`split_camel_case` must precede `lowercase`.** It splits on case changes, so
+  lowercasing first destroys the only signal it has.
+- **`apostrophe` must follow the split.** `word_delimiter_graph` strips the `s` from
+  `OpenSearch's` in the split parts, but `preserve_original` keeps `OpenSearch'`
+  *including the apostrophe* — so without this filter the exact product name would not
+  match. This was found by running `/api/v1/analyze/compare`, not by reading the config.
+
+`DocumentsIndexDefinitionTest` asserts this ordering, so a later "tidy-up" cannot
+quietly break it.
+
+### What the analyzer buys you
+
+```bash
+curl -G localhost:8080/api/v1/analyze --data-urlencode 'text=OpenSearch is a Distributed Search Engine' --data-urlencode 'field=content'
+```
+
+```text
+Day 2 (inferred):  ['opensearch', 'is', 'a', 'distributed', 'search', 'engine']
+Day 3 (explicit):  ['opensearch', 'open', 'search', 'distribut', 'engin']
+```
+
+Three wins in one line: stop words gone, words stemmed, and `OpenSearch` searchable as
+`open` **and** `search`. That last one fixes a real Day 2 defect — searching
+"search engine" then matched only the two articles containing that literal phrase; it
+now also finds *Relevance scoring with BM25*, which never uses the word "search" on its
+own, only "OpenSearch".
+
+Compare analyzers directly:
+
+```bash
+curl -G localhost:8080/api/v1/analyze/compare --data-urlencode "text=OpenSearch's Distributed Analytics Engines"
+```
+
+```text
+document_text   6  ['opensearch', 'open', 'search', 'distribut', 'analyt', 'engin']
+standard        4  ["opensearch's", 'distributed', 'analytics', 'engines']
+english         4  ['opensearch', 'distribut', 'analyt', 'engin']
+keyword         1  ["OpenSearch's Distributed Analytics Engines"]
+whitespace      4  ["OpenSearch's", 'Distributed', 'Analytics', 'Engines']
+```
+
+### Normalizers: exact but not case-sensitive
+
+`category` and `tags` use a `lowercase_exact` normalizer, so a filter matches
+regardless of the case it was written in — while `_source` keeps the original text:
+
+```bash
+# stored as "SEARCH", found by "search"
+curl -X POST localhost:8080/api/v1/documents -H 'Content-Type: application/json' \
+     -d '{"title":"x","content":"y","category":"SEARCH","tags":["Analyzers"]}'
+```
+
+A normalizer rewrites the **indexed term**, not the stored document. On Day 2 the same
+filter with the wrong case returned nothing.
+
+### Changing a mapping
+
+Field types and analyzers are effectively immutable: the terms already on disk were
+produced by the old analysis chain, so OpenSearch will not reinterpret them. Startup
+therefore *reports* drift rather than mutating anything:
+
+```text
+WARN  Index 'documents' does not match opensearch/documents-index.json — 4 field(s) differ:
+      {category=expected keyword, found text, author=..., id=..., tags=...}
+WARN  Field types and analyzers cannot be changed in place. In development, recreate the index:
+WARN      curl -X DELETE 'http://localhost:9200/documents'   then restart
+```
+
+Deleting and restarting is fine locally — the sample data reseeds. Day 8 replaces this
+with a proper reindex so production data survives.
+
 ### Library integration notes
 
 Two non-obvious things about running these libraries on Spring Boot 4:
@@ -476,8 +620,8 @@ meant to teach.
 |-----|----------------------------------------------------------------|--------|
 | 1   | Git, Spring Boot skeleton, Docker Compose, health endpoint       | Done   |
 | 2   | MongoDB document model, OpenSearch index, basic indexing, sample data | Done |
-| 3   | Mappings, analyzers, tokenizers, text vs keyword                 | Next   |
-| 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | — |
+| 3   | Mappings, analyzers, tokenizers, text vs keyword                 | Done   |
+| 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | Next |
 | 5   | OpenSearch integration, auto-indexing, update/delete sync        | —      |
 | 6   | Query DSL: match, bool, filter, range, pagination, sorting       | —      |
 | 7   | Aggregations, relevance, boosting, search optimisation           | —      |
@@ -485,24 +629,14 @@ meant to teach.
 | 9   | Integration tests, performance, logging, Docker cleanup          | —      |
 | 10  | AWS-ready + production config, docs, cleanup                     | —      |
 
-### Next up — Day 3
+### Next up — Day 4
 
-Explicit mappings and analysis. The index currently uses **dynamic mapping**, and
-what OpenSearch inferred shows exactly why Day 3 matters:
+MongoDB becomes the source of truth. Today the API writes only to OpenSearch, which is
+why MongoDB Compass shows no `documents` collection: nothing has written to it yet, and
+Mongo creates a database lazily on first write.
 
-```text
-author     text  + .keyword     category   text  + .keyword
-content    text  + .keyword     tags       text  + .keyword
-title      text  + .keyword     createdAt  date
-```
-
-Every string became `text` with a `.keyword` sub-field. That is wrong in both
-directions: `content` gets a `.keyword` sub-field nothing will ever use (and which
-silently drops values over 256 characters), while `category` and `tags` are analyzed
-`text` when they only ever need exact filtering and aggregation — so they should be
-pure `keyword`.
-
-- Explicit mappings for the documents index
-- Analyzers and tokenizers, with worked examples via `_analyze`
-- `text` vs `keyword`, and when each is correct
-- Mapping configuration and reindexing onto the new mapping
+- MongoDB persistence behind a repository
+- CRUD APIs backed by MongoDB rather than the index
+- Request validation with Bean Validation
+- Uniform error responses via a `@ControllerAdvice`, replacing today's bare 404s
+- Unit tests for the persistence and validation paths

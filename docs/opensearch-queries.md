@@ -11,6 +11,12 @@ Run them in **OpenSearch Dashboards → Management → Dev Tools**
 > Captured against OpenSearch 3.7.0, index `documents`, 11 documents, 1 primary
 > shard / 0 replicas, cluster green.
 
+> **Field names changed on Day 3.** These queries were captured while the index used
+> inferred mappings. With explicit mappings in place, `category.keyword` is now just
+> `category`, and the same applies to `tags` and `author`. See
+> [What changed after Day 3](#what-changed-after-day-3) at the end — including two
+> queries whose whole lesson the new mapping makes obsolete, which is the point.
+
 ---
 
 ## I — Finding things
@@ -402,3 +408,88 @@ Field types were **inferred automatically**, which is how `content` ended up wit
 unused exact-value twin, and how `category` and `tags` became flexible text when they
 only ever need exact matching. Defining the field types explicitly is Day 3's work,
 and queries 7 and 18 are the argument for it.
+
+---
+
+## What changed after Day 3
+
+Explicit mappings landed. Two things follow: some field names moved, and two of the
+lessons above no longer apply — which is the best possible outcome, because both were
+demonstrations of a defect.
+
+### Field names
+
+| Before (inferred) | After (explicit) | Why |
+|---|---|---|
+| `category.keyword` | `category` | `category` *is* a keyword field now |
+| `tags.keyword` | `tags` | Same |
+| `author.keyword` | `author` | Same; `author.text` added for name searches |
+| `title.keyword` | `title.keyword` | Unchanged — `title` is still analyzed text |
+| `content.keyword` | *removed* | Nothing ever sorted or filtered on a body of text |
+
+So queries 6, 8, 13, 14, 15 and 16 all lose the `.keyword` suffix on
+`category`/`tags`/`author`.
+
+### Query 7 now works — the trap is gone
+
+```json
+{ "query": { "term": { "category": "OPERATIONS" } } }
+```
+
+```text
+total matched: 3
+ 1.000  Choosing a shard count
+ 1.000  Bulk indexing throughput
+ 1.000  Container memory limits and the JVM
+```
+
+Day 2 returned **0** for this. `category` is now a keyword field with a lowercase
+*normalizer*, so the case of the query no longer matters. Note the distinction: a
+normalizer rewrites the **indexed term**, not the stored document — `_source` still
+holds whatever case was submitted.
+
+### Query 18 tells a different story
+
+```json
+GET documents/_analyze
+{ "field": "content", "text": "OpenSearch is a Distributed Search Engine" }
+```
+
+```text
+Day 2:  ['opensearch', 'is', 'a', 'distributed', 'search', 'engine']
+Day 3:  ['opensearch', 'open', 'search', 'distribut', 'engin']
+```
+
+Stop words dropped, words stemmed, and `OpenSearch` now stored as `open` **and**
+`search` as well as itself. Which means query 1 behaves differently too:
+
+```json
+{ "query": { "match": { "content": "search engine" } } }
+```
+
+```text
+total matched: 2
+ 1.981  Introduction to OpenSearch
+ 0.662  Relevance scoring with BM25    <- new
+```
+
+*Relevance scoring with BM25* never uses the word "search" on its own — only
+"OpenSearch". On Day 2 it was unfindable. That is what an analyzer is for.
+
+### One new tool worth demonstrating
+
+```bash
+curl -G localhost:8080/api/v1/analyze/compare \
+     --data-urlencode "text=OpenSearch's Distributed Analytics Engines"
+```
+
+```text
+document_text   6  ['opensearch', 'open', 'search', 'distribut', 'analyt', 'engin']
+standard        4  ["opensearch's", 'distributed', 'analytics', 'engines']
+english         4  ['opensearch', 'distribut', 'analyt', 'engin']
+keyword         1  ["OpenSearch's Distributed Analytics Engines"]
+whitespace      4  ["OpenSearch's", 'Distributed', 'Analytics', 'Engines']
+```
+
+Six analyzers on one string. `keyword` returning a single token is the clearest
+one-line explanation of `keyword` vs `text` there is.
