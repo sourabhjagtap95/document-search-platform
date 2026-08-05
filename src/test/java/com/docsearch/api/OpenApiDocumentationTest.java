@@ -16,7 +16,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  */
 @SpringBootTest(properties = {
         "opensearch.auto-create-index=false",
-        "app.sample-data.enabled=false"
+        "app.sample-data.enabled=false",
+        "spring.data.mongodb.auto-index-creation=false"
 })
 @AutoConfigureMockMvc
 class OpenApiDocumentationTest {

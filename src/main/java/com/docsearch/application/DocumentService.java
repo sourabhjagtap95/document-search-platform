@@ -1,36 +1,42 @@
 package com.docsearch.application;
 
 import com.docsearch.domain.SearchDocument;
-import com.docsearch.infrastructure.opensearch.OpenSearchDocumentRepository;
+import com.docsearch.infrastructure.mongo.DocumentEntity;
+import com.docsearch.infrastructure.mongo.DocumentRepository;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 
-import java.io.IOException;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 
 /**
- * Document use cases. Owns id generation and timestamp handling so no caller can
- * write a document with an inconsistent {@code createdAt}/{@code updatedAt}.
+ * Document use cases, backed by MongoDB — the source of truth.
  *
- * <p>Speaks only {@link SearchDocument} — never the API's DTOs — so the REST layer
- * can change shape without touching this class. {@code ArchitectureRulesTest}
- * enforces that direction of dependency.
+ * <p>Owns id generation and timestamps so no caller can persist a document with an
+ * inconsistent {@code createdAt}/{@code updatedAt}. Ids are generated here as UUIDs
+ * rather than letting Mongo mint an ObjectId, because the same id has to address the
+ * document in the OpenSearch index too — Day 5 depends on that.
+ *
+ * <p>Speaks only {@link SearchDocument}; the REST layer's DTOs never reach this class.
+ *
+ * <p>Writes do <strong>not</strong> reach the search index yet. That asymmetry is
+ * deliberate and temporary: Day 5 introduces indexing and keeps the two stores in step.
  */
 @Service
 public class DocumentService {
 
-    private final OpenSearchDocumentRepository repository;
+    private final DocumentRepository repository;
     private final Clock clock;
 
-    public DocumentService(OpenSearchDocumentRepository repository, Clock clock) {
+    public DocumentService(DocumentRepository repository, Clock clock) {
         this.repository = repository;
         this.clock = clock;
     }
 
-    public SearchDocument create(SearchDocument document) throws IOException {
+    public SearchDocument create(SearchDocument document) {
         Instant now = Instant.now(clock);
         SearchDocument toSave = new SearchDocument(
                 UUID.randomUUID().toString(),
@@ -41,59 +47,63 @@ public class DocumentService {
                 document.tags(),
                 now,
                 now);
-        return repository.save(toSave);
+        return persist(toSave);
     }
 
-    public Optional<SearchDocument> findById(String id) throws IOException {
-        return repository.findById(id);
+    public SearchDocument findById(String id) {
+        return repository.findById(id)
+                .map(DocumentEntity::toDomain)
+                .orElseThrow(() -> new DocumentNotFoundException(id));
     }
 
-    public List<SearchDocument> findAll(int limit) throws IOException {
-        return repository.findAll(limit);
+    /** Newest first — MongoDB can order by a stored field, so listing is now sorted. */
+    public List<SearchDocument> findAll(int limit) {
+        return repository
+                .findAll(PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "createdAt")))
+                .map(DocumentEntity::toDomain)
+                .getContent();
     }
 
-    /** Full replacement. Returns empty when the document does not exist. */
-    public Optional<SearchDocument> replace(String id, SearchDocument replacement) throws IOException {
-        Optional<SearchDocument> existing = repository.findById(id);
-        if (existing.isEmpty()) {
-            return Optional.empty();
-        }
+    /** Full replacement. {@code createdAt} is taken from the stored document. */
+    public SearchDocument replace(String id, SearchDocument replacement) {
+        SearchDocument existing = findById(id);
 
-        SearchDocument merged = new SearchDocument(
+        return persist(new SearchDocument(
                 id,
                 replacement.title(),
                 replacement.content(),
                 replacement.author(),
                 replacement.category(),
                 replacement.tags(),
-                // createdAt belongs to the original document, not the request.
-                existing.get().createdAt(),
-                Instant.now(clock));
-        return Optional.of(repository.save(merged));
+                existing.createdAt(),
+                Instant.now(clock)));
     }
 
     /** Partial update — only non-null fields of {@code changes} are applied. */
-    public Optional<SearchDocument> patch(String id, SearchDocument changes) throws IOException {
-        Optional<SearchDocument> existing = repository.findById(id);
-        if (existing.isEmpty()) {
-            return Optional.empty();
-        }
+    public SearchDocument patch(String id, SearchDocument changes) {
+        SearchDocument existing = findById(id);
 
-        SearchDocument patched = existing.get().patch(
+        return persist(existing.patch(
                 changes.title(),
                 changes.content(),
                 changes.author(),
                 changes.category(),
                 changes.tags().isEmpty() ? null : changes.tags(),
-                Instant.now(clock));
-        return Optional.of(repository.save(patched));
+                Instant.now(clock)));
     }
 
-    public boolean delete(String id) throws IOException {
-        return repository.deleteById(id);
+    public void delete(String id) {
+        if (!repository.existsById(id)) {
+            throw new DocumentNotFoundException(id);
+        }
+        repository.deleteById(id);
     }
 
-    public long count() throws IOException {
+    public long count() {
         return repository.count();
+    }
+
+    private SearchDocument persist(SearchDocument document) {
+        return repository.save(DocumentEntity.fromDomain(document)).toDomain();
     }
 }

@@ -1,5 +1,6 @@
 package com.docsearch.api;
 
+import com.docsearch.api.dto.DocumentPatchRequest;
 import com.docsearch.api.dto.DocumentRequest;
 import com.docsearch.api.dto.DocumentResponse;
 import com.docsearch.application.DocumentService;
@@ -9,6 +10,10 @@ import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -19,26 +24,31 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.util.UriComponentsBuilder;
 
-import java.io.IOException;
 import java.util.List;
 
 /**
- * Document CRUD. Backed by OpenSearch for now — Day 4 makes MongoDB the source of
- * truth and Day 5 keeps the two in sync.
+ * Document CRUD against MongoDB, the source of truth.
  *
- * <p>Request validation and a uniform error body are Day 4's scope, so missing
- * documents simply map to 404 here and there is no {@code @ControllerAdvice} yet.
+ * <p>Absence and invalid input are handled by {@code GlobalExceptionHandler}, so the
+ * methods below describe the success path only — no {@code Optional} plumbing, no
+ * per-method error mapping.
+ *
+ * <p>Writes are not reflected in the search index yet; Day 5 adds that.
  */
+// No @Validated on the class: Spring 6.1+ validates constrained controller parameters
+// natively and raises HandlerMethodValidationException, which carries the parameter and
+// its message. @Validated would instead route through the older AOP path and produce a
+// ConstraintViolationException with less context.
 @RestController
 @RequestMapping("/api/v1/documents")
 @Tag(name = "Documents", description = "Create, read, update and delete documents")
 public class DocumentController {
 
     private static final int DEFAULT_LIMIT = 20;
-    private static final int MAX_LIMIT = 100;
 
     private final DocumentService service;
 
@@ -47,10 +57,13 @@ public class DocumentController {
     }
 
     @Operation(summary = "Create a document",
-            description = "Assigns a server-generated id and indexes the document.")
-    @ApiResponse(responseCode = "201", description = "Created; the Location header holds the new URI")
+            description = "Assigns a server-generated id and timestamps, then persists to MongoDB.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "201", description = "Created; the Location header holds the new URI"),
+            @ApiResponse(responseCode = "400", description = "Validation failed", content = {})
+    })
     @PostMapping
-    public ResponseEntity<DocumentResponse> create(@RequestBody DocumentRequest request) throws IOException {
+    public ResponseEntity<DocumentResponse> create(@Valid @RequestBody DocumentRequest request) {
         SearchDocument created = service.create(request.toDomain());
         return ResponseEntity
                 .created(UriComponentsBuilder.fromPath("/api/v1/documents/{id}")
@@ -64,59 +77,55 @@ public class DocumentController {
             @ApiResponse(responseCode = "404", description = "No document with that id", content = {})
     })
     @GetMapping("/{id}")
-    public ResponseEntity<DocumentResponse> findById(
-            @Parameter(description = "Document id") @PathVariable String id) throws IOException {
-        return service.findById(id)
-                .map(DocumentResponse::from)
-                .map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
+    public DocumentResponse findById(
+            @Parameter(description = "Document id") @PathVariable String id) {
+        return DocumentResponse.from(service.findById(id));
     }
 
-    @Operation(summary = "List documents",
-            description = """
-                    Returns documents with a match_all query, newest-first ordering not
-                    guaranteed. Real querying — matching, filtering, sorting and paging —
-                    is Day 6.""")
+    @Operation(summary = "List documents", description = "Newest first.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Listed"),
+            @ApiResponse(responseCode = "400", description = "limit out of range", content = {})
+    })
     @GetMapping
     public List<DocumentResponse> findAll(
-            @Parameter(description = "Maximum documents to return (1-100)")
-            @RequestParam(defaultValue = "" + DEFAULT_LIMIT) int limit) throws IOException {
-        int effective = Math.clamp(limit, 1, MAX_LIMIT);
-        return service.findAll(effective).stream()
-                .map(DocumentResponse::from)
-                .toList();
+            @Parameter(description = "Maximum documents to return")
+            @RequestParam(defaultValue = "" + DEFAULT_LIMIT)
+            @Min(value = 1, message = "limit must be at least 1")
+            @Max(value = 100, message = "limit must be at most 100")
+            int limit) {
+
+        // Day 3 silently clamped an out-of-range limit. Now it is a 400: quietly
+        // returning something other than what was asked for hides caller bugs.
+        return service.findAll(limit).stream().map(DocumentResponse::from).toList();
     }
 
     @Operation(summary = "Replace a document",
             description = "Overwrites every field. createdAt is preserved from the stored document.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Replaced"),
+            @ApiResponse(responseCode = "400", description = "Validation failed", content = {}),
             @ApiResponse(responseCode = "404", description = "No document with that id", content = {})
     })
     @PutMapping("/{id}")
-    public ResponseEntity<DocumentResponse> replace(@PathVariable String id,
-                                                    @RequestBody DocumentRequest request) throws IOException {
-        return service.replace(id, request.toDomain())
-                .map(DocumentResponse::from)
-                .map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
+    public DocumentResponse replace(@PathVariable String id,
+                                    @Valid @RequestBody DocumentRequest request) {
+        return DocumentResponse.from(service.replace(id, request.toDomain()));
     }
 
     @Operation(summary = "Partially update a document",
             description = """
-                    Applies only the fields present in the body. Note that an empty or
-                    absent tags array means "leave tags alone" — use PUT to clear them.""")
+                    Applies only the fields present in the body. An empty or absent tags array
+                    means "leave tags alone" — use PUT to clear them.""")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Updated"),
+            @ApiResponse(responseCode = "400", description = "Validation failed", content = {}),
             @ApiResponse(responseCode = "404", description = "No document with that id", content = {})
     })
     @PatchMapping("/{id}")
-    public ResponseEntity<DocumentResponse> patch(@PathVariable String id,
-                                                  @RequestBody DocumentRequest request) throws IOException {
-        return service.patch(id, request.toDomain())
-                .map(DocumentResponse::from)
-                .map(ResponseEntity::ok)
-                .orElseGet(() -> ResponseEntity.notFound().build());
+    public DocumentResponse patch(@PathVariable String id,
+                                  @Valid @RequestBody DocumentPatchRequest request) {
+        return DocumentResponse.from(service.patch(id, request.toDomain()));
     }
 
     @Operation(summary = "Delete a document")
@@ -124,10 +133,9 @@ public class DocumentController {
             @ApiResponse(responseCode = "204", description = "Deleted", content = {}),
             @ApiResponse(responseCode = "404", description = "No document with that id", content = {})
     })
+    @ResponseStatus(HttpStatus.NO_CONTENT)
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable String id) throws IOException {
-        return service.delete(id)
-                ? ResponseEntity.noContent().build()
-                : ResponseEntity.notFound().build();
+    public void delete(@PathVariable String id) {
+        service.delete(id);
     }
 }
