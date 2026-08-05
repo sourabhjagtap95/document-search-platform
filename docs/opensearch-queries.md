@@ -457,11 +457,12 @@ GET documents/_analyze
 
 ```text
 Day 2:  ['opensearch', 'is', 'a', 'distributed', 'search', 'engine']
-Day 3:  ['opensearch', 'open', 'search', 'distribut', 'engin']
+Day 3:  ['opensearch', 'open', 'search', 'distribut', 'search', 'engin']
 ```
 
 Stop words dropped, words stemmed, and `OpenSearch` now stored as `open` **and**
-`search` as well as itself. Which means query 1 behaves differently too:
+`search` as well as itself — which is why `search` appears twice, once from the product
+name and once from the literal word. Query 1 therefore behaves differently too:
 
 ```json
 { "query": { "match": { "content": "search engine" } } }

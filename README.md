@@ -532,11 +532,14 @@ curl -G localhost:8080/api/v1/analyze --data-urlencode 'text=OpenSearch is a Dis
 
 ```text
 Day 2 (inferred):  ['opensearch', 'is', 'a', 'distributed', 'search', 'engine']
-Day 3 (explicit):  ['opensearch', 'open', 'search', 'distribut', 'engin']
+Day 3 (explicit):  ['opensearch', 'open', 'search', 'distribut', 'search', 'engin']
 ```
 
-Three wins in one line: stop words gone, words stemmed, and `OpenSearch` searchable as
-`open` **and** `search`. That last one fixes a real Day 2 defect — searching
+Three wins: stop words gone, words stemmed, and `OpenSearch` searchable as `open`
+**and** `search`. The token count is unchanged only by coincidence — the two stop words
+removed are offset by the extra token the camelCase split added, and `search` now
+legitimately appears twice (once from `OpenSearch`, once from the literal word). That
+last one fixes a real Day 2 defect — searching
 "search engine" then matched only the two articles containing that literal phrase; it
 now also finds *Relevance scoring with BM25*, which never uses the word "search" on its
 own, only "OpenSearch".
