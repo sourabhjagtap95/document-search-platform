@@ -1,6 +1,19 @@
 spring:
   application:
     name: document-search-platform
+  # Connection settings live under spring.mongodb.* in Spring Boot 4, NOT under
+  # spring.data.mongodb.* as every Boot 3 tutorial shows. The old key still appears in
+  # the configuration metadata, so nothing warns you it is being ignored — the driver
+  # simply connects with no credentials and the first command fails with
+  # "Command createIndexes requires authentication".
+  mongodb:
+    uri: ${MONGO_URI:mongodb://root:change-me@localhost:27017/documents?authSource=admin}
+  data:
+    mongodb:
+      # Spring Data's own settings do stay under spring.data.mongodb.*. This one creates
+      # the indexes declared on DocumentEntity, and does so while the context starts, so
+      # it needs a live MongoDB — the full-context tests switch it off, as CI has none.
+      auto-index-creation: ${MONGO_AUTO_INDEX_CREATION:true}
 
 # Bound to com.docsearch.config.ApplicationProperties.
 # @project.version@ is substituted by Maven resource filtering at build time.
@@ -8,6 +21,14 @@ app:
   name: Document Search Platform
   version: '@project.version@'
   description: Document search over MongoDB and OpenSearch
+  sample-data:
+    # Seeds sample-documents.json on startup, but only when the index is empty.
+    enabled: ${SAMPLE_DATA_ENABLED:true}
+
+opensearch:
+  uri: ${OPENSEARCH_URI:http://localhost:9200}
+  documents-index: ${OPENSEARCH_DOCUMENTS_INDEX:documents}
+  auto-create-index: ${OPENSEARCH_AUTO_CREATE_INDEX:true}
 
 server:
   port: ${SERVER_PORT:8080}

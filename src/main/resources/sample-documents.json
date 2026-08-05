@@ -1,0 +1,72 @@
+[
+  {
+    "title": "Introduction to OpenSearch",
+    "content": "OpenSearch is a distributed search and analytics engine built on Apache Lucene. It stores data as JSON documents grouped into indices, and answers queries in near real time by searching inverted indexes rather than scanning rows.",
+    "author": "Sourabh Jagtap",
+    "category": "search",
+    "tags": ["opensearch", "tutorial", "basics"]
+  },
+  {
+    "title": "Text versus keyword fields",
+    "content": "A text field is analyzed into tokens so it can be matched loosely, while a keyword field is stored verbatim for exact filters, sorting and aggregations. Choosing wrongly is the single most common mapping mistake: filters on a text field behave unpredictably.",
+    "author": "Sourabh Jagtap",
+    "category": "search",
+    "tags": ["opensearch", "mapping", "analyzers"]
+  },
+  {
+    "title": "MongoDB document modelling",
+    "content": "MongoDB stores BSON documents in collections with no enforced schema. Model around the queries you intend to run: embed data you read together, reference data that grows without bound or is shared across documents.",
+    "author": "Priya Nair",
+    "category": "database",
+    "tags": ["mongodb", "modelling", "nosql"]
+  },
+  {
+    "title": "Choosing a shard count",
+    "content": "Shards are the unit of horizontal scale and cannot be changed after index creation without a reindex. Oversharding wastes heap on cluster state; undersharding caps throughput. A few tens of gigabytes per shard is a reasonable starting point.",
+    "author": "Marcus Webb",
+    "category": "operations",
+    "tags": ["opensearch", "shards", "scaling", "performance"]
+  },
+  {
+    "title": "Relevance scoring with BM25",
+    "content": "OpenSearch scores matches with BM25, which rewards terms that are frequent in a document but rare across the corpus, and dampens the effect of document length. Field boosting shifts the balance when a title match should outrank a body match.",
+    "author": "Priya Nair",
+    "category": "search",
+    "tags": ["opensearch", "relevance", "scoring", "bm25"]
+  },
+  {
+    "title": "Keeping two datastores in sync",
+    "content": "When one store is the source of truth and another is a derived index, writes must be ordered and failures must be recoverable. Dual writes drift under partial failure; reading a change stream or an outbox table is the durable approach.",
+    "author": "Marcus Webb",
+    "category": "architecture",
+    "tags": ["mongodb", "opensearch", "consistency", "patterns"]
+  },
+  {
+    "title": "Spring Boot configuration properties",
+    "content": "Binding configuration to a typed record makes invalid setups fail at startup rather than surfacing as a null deep in a request. Constructor binding also keeps the resulting object immutable and trivially unit-testable.",
+    "author": "Aisha Rahman",
+    "category": "java",
+    "tags": ["spring-boot", "configuration", "java"]
+  },
+  {
+    "title": "Bulk indexing throughput",
+    "content": "The bulk API amortises network and refresh overhead across many documents. Refreshing after every write makes changes instantly visible but forces a segment flush each time, so high-volume ingestion should batch and refresh on an interval instead.",
+    "author": "Aisha Rahman",
+    "category": "operations",
+    "tags": ["opensearch", "bulk", "performance", "indexing"]
+  },
+  {
+    "title": "Aggregations for analytics",
+    "content": "Aggregations summarise matching documents instead of returning them: bucket by term or date histogram, then compute metrics inside each bucket. They run on the same query, so filters and aggregations share one round trip.",
+    "author": "Priya Nair",
+    "category": "search",
+    "tags": ["opensearch", "aggregations", "analytics"]
+  },
+  {
+    "title": "Container memory limits and the JVM",
+    "content": "A JVM that reads host memory instead of its cgroup limit will size its heap far too large and be killed by the container runtime. MaxRAMPercentage ties the heap to the limit the container was actually given.",
+    "author": "Marcus Webb",
+    "category": "operations",
+    "tags": ["docker", "jvm", "memory", "java"]
+  }
+]

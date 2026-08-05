@@ -24,6 +24,8 @@
              the 2.x line targets Boot 3 and will not work here. -->
         <springdoc.version>3.0.3</springdoc.version>
         <archunit.version>1.4.2</archunit.version>
+        <!-- Spring Boot does not manage OpenSearch, so this must be pinned. -->
+        <opensearch-java.version>3.5.0</opensearch-java.version>
     </properties>
 
     <dependencies>
@@ -44,6 +46,30 @@
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
             <version>${springdoc.version}</version>
+        </dependency>
+
+        <!-- MongoDB: source of truth for documents -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-mongodb</artifactId>
+        </dependency>
+
+        <!-- Bean Validation: constraints on request payloads -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!--
+          Official OpenSearch Java client, used directly rather than through a
+          Spring Data module: the later days need the raw Query DSL, aggregation,
+          reindex and cluster APIs, and the community Spring Data OpenSearch
+          module lags Spring Boot releases.
+        -->
+        <dependency>
+            <groupId>org.opensearch.client</groupId>
+            <artifactId>opensearch-java</artifactId>
+            <version>${opensearch-java.version}</version>
         </dependency>
 
         <!-- JUnit 5, Mockito, AssertJ -->

@@ -11,13 +11,13 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 
 ## Status
 
-**Day 1 of 10 complete** — infrastructure and application skeleton.
+**Day 4 of 10 complete** — MongoDB persistence, validation and error handling.
 
 ### Completed
 
-- Git repository initialised
-- Maven + Spring Boot 4.1.0 project on Java 21
-- Maven wrapper (`./mvnw`) for reproducible builds
+**Day 1 — infrastructure and skeleton**
+
+- Maven + Spring Boot 4.1.0 project on Java 21, Maven wrapper for reproducible builds
 - Docker Compose stack: MongoDB + OpenSearch (+ optional Dashboards and app)
 - Multi-stage `Dockerfile` — non-root, cgroup-aware heap, container healthcheck
 - GitHub Actions CI: build, test, and container image build
@@ -27,11 +27,43 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 - OpenAPI 3.1 spec and Swagger UI via springdoc
 - Build metadata on `/actuator/info` via `build-info`
 - ArchUnit rules enforcing the Clean Architecture layering
-- 26 passing tests
+
+**Day 2 — document model, index and CRUD**
+
+- `SearchDocument` domain record — framework-free, shared by both stores
+- `DocumentEntity` — the MongoDB document model, mapped to and from the domain
+- OpenSearch index bootstrapped at startup when missing
+- Full CRUD over the OpenSearch document APIs: index, get, `_update`, delete, bulk
+- `/api/v1/documents` REST endpoints, documented in Swagger UI
+- 10 sample documents seeded from `sample-documents.json`, only when the index is empty
+
+**Day 3 — mappings and analysis**
+
+- Explicit index definition in `opensearch/documents-index.json`: settings, custom
+  analyzer, and a mapped type for every field
+- `dynamic: strict` — an unmapped field is now a loud rejection, not a guessed type
+- `text` vs `keyword` decided per field rather than inferred
+- Custom `document_text` analyzer: markup stripping, camelCase splitting, apostrophe
+  cleanup, stop words and English stemming
+- Case-insensitive exact filtering on `category` and `tags` via a normalizer
+- `/api/v1/analyze` and `/api/v1/analyze/compare` to inspect tokenisation
+- Mapping drift is detected and reported at startup instead of silently ignored
+
+**Day 4 — persistence, validation, error handling**
+
+- MongoDB is now the source of truth; CRUD reads and writes go there
+- `DocumentRepository` (Spring Data), with the `@Indexed` fields actually created
+- Bean Validation on request bodies, with a separate optional-field shape for `PATCH`
+- `GlobalExceptionHandler` returning RFC 9457 `application/problem+json`, every response
+  carrying the request's correlation id
+- An out-of-range `limit` is a `400` rather than being silently clamped
+- Listing is ordered newest-first, which MongoDB can do and a `match_all` could not
+- 121 passing tests
 
 ### Not yet built
 
-CRUD, persistence, indexing and search all arrive on later days. See
+**Writes do not reach the search index yet** — see [Where Day 4 stops](#where-day-4-stops).
+Real search — matching, filtering, sorting, aggregations — is Days 6-7. See
 [Roadmap](#roadmap).
 
 ---
@@ -53,11 +85,15 @@ CRUD, persistence, indexing and search all arrive on later days. See
         truth)       index)
 ```
 
-Packages are created as they are needed rather than up front, so only `api`
-exists today. The layering above is the target shape.
+Supporting packages sit alongside these: `domain` for the framework-free core model,
+`config` for typed configuration, and `web` for servlet-level concerns such as
+correlation ids.
 
-Supporting packages sit alongside these: `config` for typed configuration and
-`web` for servlet-level concerns such as correlation ids.
+**`domain` must stay framework-free.** `SearchDocument` carries no Spring, Mongo or
+OpenSearch annotations, so the same shape can be persisted to Mongo and indexed into
+OpenSearch without either store's concerns leaking into the core. That is why there
+is a separate `DocumentEntity` for Mongo rather than one annotated class —
+`ArchitectureRulesTest` fails the build if a framework import appears in `domain`.
 
 ### Current layout
 
@@ -77,22 +113,62 @@ Supporting packages sit alongside these: `config` for typed configuration and
     ├── main
     │   ├── java/com/docsearch
     │   │   ├── DocumentSearchApplication.java
-    │   │   ├── api
+    │   │   ├── api                      # REST layer
+    │   │   │   ├── AnalyzeController.java
+    │   │   │   ├── DocumentController.java
+    │   │   │   ├── GlobalExceptionHandler.java
     │   │   │   ├── HealthController.java
-    │   │   │   └── dto/HealthResponse.java
+    │   │   │   └── dto
+    │   │   │       ├── DocumentPatchRequest.java
+    │   │   │       ├── DocumentRequest.java
+    │   │   │       ├── DocumentResponse.java
+    │   │   │       └── HealthResponse.java
+    │   │   ├── application              # use cases
+    │   │   │   ├── AnalysisService.java
+    │   │   │   ├── DocumentNotFoundException.java
+    │   │   │   └── DocumentService.java
+    │   │   ├── domain                   # framework-free core model
+    │   │   │   ├── AnalyzedToken.java
+    │   │   │   └── SearchDocument.java
+    │   │   ├── infrastructure
+    │   │   │   ├── SampleDataLoader.java
+    │   │   │   ├── mongo
+    │   │   │   │   ├── DocumentEntity.java
+    │   │   │   │   └── DocumentRepository.java
+    │   │   │   └── opensearch
+    │   │   │       ├── DocumentIndexInitializer.java
+    │   │   │       ├── OpenSearchAnalyzer.java
+    │   │   │       └── OpenSearchDocumentRepository.java
     │   │   ├── config
     │   │   │   ├── ApplicationProperties.java
-    │   │   │   └── OpenApiConfig.java
+    │   │   │   ├── OpenApiConfig.java
+    │   │   │   ├── OpenSearchClientConfig.java
+    │   │   │   ├── OpenSearchProperties.java
+    │   │   │   └── TimeConfig.java
     │   │   └── web/CorrelationIdFilter.java
-    │   └── resources/application.yml
+    │   └── resources
+    │       ├── application.yml
+    │       ├── opensearch
+    │       │   └── documents-index.json   # settings + explicit mappings
+    │       └── sample-documents.json
     └── test
         ├── java/com/docsearch
         │   ├── DocumentSearchApplicationTests.java
         │   ├── api
+        │   │   ├── AnalyzeControllerTest.java
+        │   │   ├── DocumentControllerTest.java
         │   │   ├── HealthControllerTest.java
-        │   │   └── OpenApiDocumentationTest.java
+        │   │   ├── OpenApiDocumentationTest.java
+        │   │   └── dto/DocumentRequestValidationTest.java
+        │   ├── application
+        │   │   ├── AnalysisServiceTest.java
+        │   │   └── DocumentServiceTest.java
         │   ├── architecture/ArchitectureRulesTest.java
         │   ├── config/ApplicationPropertiesTest.java
+        │   ├── domain/SearchDocumentTest.java
+        │   ├── infrastructure
+        │   │   ├── mongo/DocumentEntityTest.java
+        │   │   └── opensearch/DocumentsIndexDefinitionTest.java
         │   └── web/CorrelationIdFilterTest.java
         └── resources/archunit.properties
 ```
@@ -179,14 +255,124 @@ docker compose down -v     # also drop volumes
 
 ## APIs
 
-| Method | Path                 | Description                                     |
-|--------|----------------------|-------------------------------------------------|
-| `GET`  | `/api/v1/health`     | Status, application name, version, uptime       |
-| `GET`  | `/actuator/health`   | Spring Boot health, including dependencies      |
-| `GET`  | `/actuator/info`     | Build metadata — version, group, artifact, time |
-| `GET`  | `/swagger-ui.html`   | Interactive API documentation (Swagger UI)      |
-| `GET`  | `/v3/api-docs`       | OpenAPI 3.1 document (JSON)                     |
-| `GET`  | `/v3/api-docs.yaml`  | OpenAPI 3.1 document (YAML)                     |
+| Method   | Path                       | Description                                     |
+|----------|----------------------------|-------------------------------------------------|
+| `POST`   | `/api/v1/documents`        | Create a document; 201 + `Location`             |
+| `GET`    | `/api/v1/documents`        | List documents (`?limit=1..100`, default 20)    |
+| `GET`    | `/api/v1/documents/{id}`   | Fetch one; 404 when absent                      |
+| `PUT`    | `/api/v1/documents/{id}`   | Replace all fields; `createdAt` preserved       |
+| `PATCH`  | `/api/v1/documents/{id}`   | Partial update via OpenSearch `_update`         |
+| `DELETE` | `/api/v1/documents/{id}`   | Delete; 204 on success, 404 when absent         |
+| `GET`    | `/api/v1/analyze`          | Tokens for a text (`?text=`, `?analyzer=`, `?field=`) |
+| `GET`    | `/api/v1/analyze/compare`  | The same text through six analyzers             |
+| `GET`    | `/api/v1/health`           | Status, application name, version, uptime       |
+| `GET`    | `/actuator/health`         | Spring Boot health, including dependencies      |
+| `GET`    | `/actuator/info`           | Build metadata — version, group, artifact, time |
+| `GET`    | `/swagger-ui.html`         | Interactive API documentation (Swagger UI)      |
+| `GET`    | `/v3/api-docs`             | OpenAPI 3.1 document (JSON)                     |
+| `GET`    | `/v3/api-docs.yaml`        | OpenAPI 3.1 document (YAML)                     |
+
+### Documents
+
+```bash
+# create
+curl -X POST localhost:8080/api/v1/documents -H 'Content-Type: application/json' -d '{
+  "title": "Rebase survival guide",
+  "content": "Interactive rebase rewrites history.",
+  "author": "Sourabh Jagtap",
+  "category": "git",
+  "tags": ["git", "rebase"]
+}'
+
+# list, fetch, partial update, delete
+curl 'localhost:8080/api/v1/documents?limit=5'
+curl localhost:8080/api/v1/documents/<id>
+curl -X PATCH localhost:8080/api/v1/documents/<id> \
+     -H 'Content-Type: application/json' -d '{"title": "New title"}'
+curl -X DELETE localhost:8080/api/v1/documents/<id>
+```
+
+Behaviour worth knowing:
+
+- **Ids and timestamps are server-owned.** A client-supplied `id`, `createdAt` or
+  `updatedAt` is ignored, so a document can never carry inconsistent timestamps. Ids are
+  UUIDs generated by the service rather than Mongo ObjectIds, because the same id has to
+  address the document in the search index too.
+- **`PUT` preserves `createdAt`** from the stored document; only `updatedAt` moves.
+- **`PATCH` applies non-null fields only**, and an empty or absent `tags` array means
+  "leave tags alone" — use `PUT` to clear them.
+- **`limit` outside 1-100 is a `400`.** It used to be clamped; quietly returning something
+  other than what was asked for hides caller bugs.
+- **Listing is newest-first.**
+
+### Validation and errors
+
+Request bodies are validated with Bean Validation, and failures come back as RFC 9457
+`application/problem+json`:
+
+```bash
+curl -X POST localhost:8080/api/v1/documents -H 'Content-Type: application/json' -d '{"tags":[]}'
+```
+
+```json
+{
+  "type": "https://docsearch.example/problems/validation-failed",
+  "title": "Validation failed",
+  "status": 400,
+  "detail": "The request body has 4 invalid field(s)",
+  "errors": {
+    "title": "title is required",
+    "content": "content is required",
+    "author": "author is required",
+    "category": "category is required"
+  },
+  "correlationId": "881026e9-f5be-403f-a05b-59c62f3d82e0"
+}
+```
+
+Design points:
+
+- **Every field is reported at once**, not just the first — a client fixing one field at a
+  time per round trip is a bad API.
+- **Every error carries the `correlationId`**, so a user can quote it and the exact request
+  is findable in the logs.
+- **Unexpected exceptions return a generic message.** Internal detail goes to the log; an
+  error body is an information disclosure surface.
+- **`PATCH` has its own request type.** `@NotBlank` *fails on null*, so reusing the create
+  shape would reject every field a caller deliberately omitted — the opposite of what
+  PATCH means. `DocumentPatchRequest` uses `@Size`/`@Pattern`, which skip nulls, giving
+  "if you send it, it must be valid".
+- **`GlobalExceptionHandler` extends `ResponseEntityExceptionHandler`** rather than relying
+  on a bare `@ExceptionHandler(Exception.class)`. A lone catch-all looks thorough and is a
+  trap: it also swallows the exceptions Spring MVC already maps correctly — a missing query
+  parameter, an unsupported method — and reports all of them as `500`. That bug was live
+  here until a test caught it.
+
+### Where Day 4 stops
+
+MongoDB is the source of truth, and **nothing indexes yet**. A document created through
+the API is in MongoDB but not in OpenSearch:
+
+```text
+created: 0d7518bc…
+  in MongoDB       : 1
+  in OpenSearch    : False
+  API GET finds it : 200
+```
+
+That asymmetry is the Day 4 boundary, and it is what makes Day 5 necessary. The sample-data
+loader does write to both, deliberately as the naive dual write that Day 5 replaces.
+
+### Sample data
+
+`sample-documents.json` seeds 10 documents on startup, **only when the index is
+empty** — so restarting will not duplicate them and your own edits survive. The set
+spans several authors, categories and overlapping tags, which makes the Day 6-7
+query and aggregation work possible.
+
+```bash
+SAMPLE_DATA_ENABLED=false ./mvnw spring-boot:run    # start clean
+```
 
 `/api/v1/health` answers "is the app serving requests, and which build is it?".
 `/actuator/health` additionally reports on infrastructure the app depends on — as
@@ -315,6 +501,12 @@ runs with zero configuration locally and is container/AWS friendly.
 | `OPENSEARCH_JAVA_OPTS` | `-Xms512m -Xmx512m`| Compose     |
 | `DASHBOARDS_PORT`      | `5601`             | Compose     |
 | `SPRINGDOC_ENABLED`    | `true`             | Spring Boot |
+| `MONGO_URI`            | local compose URI  | Spring Boot |
+| `MONGO_AUTO_INDEX_CREATION` | `true`        | Spring Boot |
+| `OPENSEARCH_URI`       | `http://localhost:9200` | Spring Boot |
+| `OPENSEARCH_DOCUMENTS_INDEX`  | `documents` | Spring Boot |
+| `OPENSEARCH_AUTO_CREATE_INDEX`| `true`      | Spring Boot |
+| `SAMPLE_DATA_ENABLED`  | `true`             | Spring Boot |
 
 ---
 
@@ -349,6 +541,166 @@ Rules naming packages that do not exist yet pass vacuously — see
 layering is cheap to state now and expensive to retrofit once persistence and
 search land.
 
+## Mapping and analysis
+
+The index is defined by `src/main/resources/opensearch/documents-index.json` — the
+same JSON you would paste into Dev Tools, so it can be tried by hand before being
+committed. It is deserialized into the client's own types at startup, which means a
+typo fails against the typed model rather than being shipped to the cluster.
+
+### text vs keyword, field by field
+
+| Field | Type | Why |
+|---|---|---|
+| `title` | `text` + `.keyword` | Searched as prose; the sub-field exists only to sort on |
+| `content` | `text` | Searched as prose. **No** `.keyword` — nothing sorts or filters on a body of text |
+| `author` | `keyword` + `.text` | Grouping authors must be exact; `.text` still allows "documents by Nair" |
+| `category` | `keyword` + normalizer | Only ever filtered and counted, never searched as prose |
+| `tags` | `keyword` + normalizer | Same |
+| `createdAt` / `updatedAt` | `date` | Range queries and sorting |
+| `id` | `keyword`, `index: false` | Duplicates `_id`; kept in `_source`, never searched |
+
+**`text` is analyzed** into lowercase, stemmed tokens for flexible matching.
+**`keyword` is stored verbatim** for exact filters, sorting and aggregation. Choosing
+wrongly does not raise an error — it returns zero results, or quietly wrong counts.
+
+Day 2 let OpenSearch infer these, and it made every string `text` with a `.keyword`
+twin. That is wrong in both directions: `content` gained a `.keyword` nothing uses
+(which silently drops values over 256 characters), while `category` and `tags` became
+analyzed prose when they only need exact matching.
+
+### dynamic: strict
+
+An unmapped field is rejected outright:
+
+```json
+{ "type": "strict_dynamic_mapping_exception",
+  "reason": "mapping set to strict, dynamic introduction of [unexpectedField] within [_doc] is not allowed" }
+```
+
+Better a loud 400 at index time than a field nobody chose, typed by whatever the first
+document happened to contain.
+
+### The document_text analyzer
+
+```text
+char_filter  strip_markup        drop HTML so tags are not indexed as words
+tokenizer    standard            split on word boundaries
+filter       split_camel_case    "OpenSearch" -> opensearch + open + search
+             flatten_graph       required after a graph-producing filter, at index time
+             apostrophe          remove the apostrophe left by the possessive split
+             lowercase           case-insensitive matching
+             english_stop        drop "is", "a", "the"
+             english_stemmer     "engines"/"engine" -> "engin"
+```
+
+Order is load-bearing, and two of these are easy to get wrong:
+
+- **`split_camel_case` must precede `lowercase`.** It splits on case changes, so
+  lowercasing first destroys the only signal it has.
+- **`apostrophe` must follow the split.** `word_delimiter_graph` strips the `s` from
+  `OpenSearch's` in the split parts, but `preserve_original` keeps `OpenSearch'`
+  *including the apostrophe* — so without this filter the exact product name would not
+  match. This was found by running `/api/v1/analyze/compare`, not by reading the config.
+
+`DocumentsIndexDefinitionTest` asserts this ordering, so a later "tidy-up" cannot
+quietly break it.
+
+### What the analyzer buys you
+
+```bash
+curl -G localhost:8080/api/v1/analyze --data-urlencode 'text=OpenSearch is a Distributed Search Engine' --data-urlencode 'field=content'
+```
+
+```text
+Day 2 (inferred):  ['opensearch', 'is', 'a', 'distributed', 'search', 'engine']
+Day 3 (explicit):  ['opensearch', 'open', 'search', 'distribut', 'search', 'engin']
+```
+
+Three wins: stop words gone, words stemmed, and `OpenSearch` searchable as `open`
+**and** `search`. The token count is unchanged only by coincidence — the two stop words
+removed are offset by the extra token the camelCase split added, and `search` now
+legitimately appears twice (once from `OpenSearch`, once from the literal word). That
+last one fixes a real Day 2 defect — searching
+"search engine" then matched only the two articles containing that literal phrase; it
+now also finds *Relevance scoring with BM25*, which never uses the word "search" on its
+own, only "OpenSearch".
+
+Compare analyzers directly:
+
+```bash
+curl -G localhost:8080/api/v1/analyze/compare --data-urlencode "text=OpenSearch's Distributed Analytics Engines"
+```
+
+```text
+document_text   6  ['opensearch', 'open', 'search', 'distribut', 'analyt', 'engin']
+standard        4  ["opensearch's", 'distributed', 'analytics', 'engines']
+english         4  ['opensearch', 'distribut', 'analyt', 'engin']
+keyword         1  ["OpenSearch's Distributed Analytics Engines"]
+whitespace      4  ["OpenSearch's", 'Distributed', 'Analytics', 'Engines']
+```
+
+### Normalizers: exact but not case-sensitive
+
+`category` and `tags` use a `lowercase_exact` normalizer, so a filter matches
+regardless of the case it was written in — while `_source` keeps the original text:
+
+```bash
+# stored as "SEARCH", found by "search"
+curl -X POST localhost:8080/api/v1/documents -H 'Content-Type: application/json' \
+     -d '{"title":"x","content":"y","category":"SEARCH","tags":["Analyzers"]}'
+```
+
+A normalizer rewrites the **indexed term**, not the stored document. On Day 2 the same
+filter with the wrong case returned nothing.
+
+### Changing a mapping
+
+Field types and analyzers are effectively immutable: the terms already on disk were
+produced by the old analysis chain, so OpenSearch will not reinterpret them. Startup
+therefore *reports* drift rather than mutating anything:
+
+```text
+WARN  Index 'documents' does not match opensearch/documents-index.json — 4 field(s) differ:
+      {category=expected keyword, found text, author=..., id=..., tags=...}
+WARN  Field types and analyzers cannot be changed in place. In development, recreate the index:
+WARN      curl -X DELETE 'http://localhost:9200/documents'   then restart
+```
+
+Deleting and restarting is fine locally — the sample data reseeds. Day 8 replaces this
+with a proper reindex so production data survives.
+
+### Library integration notes
+
+Non-obvious things about running these libraries on Spring Boot 4:
+
+- **MongoDB connection settings live under `spring.mongodb.*`, not
+  `spring.data.mongodb.*`.** Boot 4 split the driver connection from Spring Data's own
+  settings. The old key still appears in the configuration metadata, so nothing warns you
+  it is being ignored — the driver connects with no credentials and the first command fails
+  with `Command createIndexes requires authentication`, which reads like a permissions
+  problem in MongoDB rather than a property name that moved. `auto-index-creation` *does*
+  stay under `spring.data.mongodb.*`, so the two prefixes sit side by side in
+  `application.yml`.
+
+- **The OpenSearch client gets its own Jackson mapper.** Boot 4 serves the
+  application with Jackson 3 (`tools.jackson`), while `opensearch-java` is built
+  against Jackson 2 (`com.fasterxml.jackson`). Both are on the classpath and they are
+  *different types*, so there is no bean collision — but the client's mapper has to be
+  configured separately (`JavaTimeModule`, ISO-8601 dates) in `OpenSearchClientConfig`.
+- **Content compression is disabled on the OpenSearch transport.** Boot 4.1 manages
+  `httpclient5` 5.6.1 while `opensearch-java` 3.5.0 is built against 5.5; on 5.6.x the
+  response path wraps the reply in a `GZIPInputStream` that OpenSearch's plain JSON is
+  not, and every call fails with `ZipException: Not in GZIP format`. Pinning
+  `httpclient5` back to 5.5 would pair it with Boot's `httpcore5` 5.4.2 — a
+  combination neither project tests — so disabling gzip on a usually same-host link is
+  the cheaper trade.
+
+**Why the OpenSearch client and not Spring Data.** The later days need the raw Query
+DSL, aggregations, reindex and cluster APIs; the community Spring Data OpenSearch
+module lags Spring Boot releases and would abstract away exactly what this project is
+meant to teach.
+
 > **Note on Spring Boot 4:** test slices were split out of
 > `spring-boot-starter-test` into per-technology modules. `@WebMvcTest` now comes
 > from `spring-boot-starter-webmvc-test`, which is declared separately in
@@ -361,19 +713,27 @@ search land.
 | Day | Focus                                                          | Status |
 |-----|----------------------------------------------------------------|--------|
 | 1   | Git, Spring Boot skeleton, Docker Compose, health endpoint       | Done   |
-| 2   | MongoDB document model, OpenSearch index, basic indexing, sample data | Next |
-| 3   | Mappings, analyzers, tokenizers, text vs keyword                 | —      |
-| 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | — |
-| 5   | OpenSearch integration, auto-indexing, update/delete sync        | —      |
+| 2   | MongoDB document model, OpenSearch index, basic indexing, sample data | Done |
+| 3   | Mappings, analyzers, tokenizers, text vs keyword                 | Done   |
+| 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | Done |
+| 5   | OpenSearch integration, auto-indexing, update/delete sync        | Next   |
 | 6   | Query DSL: match, bool, filter, range, pagination, sorting       | —      |
 | 7   | Aggregations, relevance, boosting, search optimisation           | —      |
 | 8   | Shards, replicas, cluster APIs, reindex endpoint                 | —      |
 | 9   | Integration tests, performance, logging, Docker cleanup          | —      |
 | 10  | AWS-ready + production config, docs, cleanup                     | —      |
 
-### Next up — Day 2
+### Next up — Day 5
 
-- Define the MongoDB document model
-- Create the OpenSearch index
-- Basic indexing via OpenSearch APIs
-- Load sample data
+Close the gap Day 4 opened. Documents written through the API land in MongoDB but never
+reach the search index, so they are retrievable by id and invisible to search.
+
+- Index automatically on create, replace and patch
+- Remove from the index on delete
+- Recover from a failed index write without losing the persisted document
+- Replace the sample loader's naive dual write with real synchronisation
+- Backfill: reindex everything already in MongoDB
+
+The interesting problem: two stores, one of them authoritative, and no shared transaction.
+The loader already contains the naive version — two independent writes with nothing tying
+them together — and its warning path spells out what happens when the second one fails.
