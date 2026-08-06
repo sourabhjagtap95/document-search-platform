@@ -80,6 +80,55 @@ services:
       opensearch:
         condition: service_healthy
 
+  # ZooKeeper — holds SolrCloud's cluster state: which nodes are live and which replica
+  # leads each shard. SolrJ reads it directly, which is how the client keeps routing
+  # correctly through leader elections and restarts without configuration changes.
+  zookeeper:
+    image: zookeeper:3.9
+    container_name: dsp-zookeeper
+    restart: unless-stopped
+    ports:
+      - "${ZOOKEEPER_PORT:-2181}:2181"
+    environment:
+      ZOO_MY_ID: 1
+      ZOO_SERVERS: server.1=zookeeper:2888:3888;2181
+      # ruok is needed for the healthcheck below; the rest are useful for inspection.
+      ZOO_4LW_COMMANDS_WHITELIST: "srvr,mntr,conf,ruok"
+    volumes:
+      - zookeeper-data:/data
+      - zookeeper-datalog:/datalog
+    healthcheck:
+      test: ["CMD-SHELL", "echo ruok | nc -w 2 localhost 2181 | grep -q imok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # Apache Solr in SolrCloud mode. The second search backend; both are kept in step from
+  # the application, behind one DocumentIndexPort interface.
+  solr:
+    image: solr:9.10.1
+    container_name: dsp-solr
+    restart: unless-stopped
+    command: solr-foreground
+    ports:
+      - "${SOLR_PORT:-8983}:8983"
+    environment:
+      # Presence of ZK_HOST is what puts Solr into cloud rather than standalone mode.
+      ZK_HOST: zookeeper:2181
+      SOLR_HEAP: ${SOLR_HEAP:-512m}
+    volumes:
+      - solr-data:/var/solr
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS 'http://localhost:8983/solr/admin/info/system?wt=json' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
   # The application itself, containerised. Opt-in so the normal dev loop stays
   # ./mvnw spring-boot:run against the two datastores above.
   #     docker compose --profile app up -d --build
@@ -94,12 +143,23 @@ services:
       - "${SERVER_PORT:-8080}:8080"
     environment:
       SERVER_PORT: 8080
+      # Container-network hostnames, not localhost: inside the container, localhost is
+      # the container itself. The defaults baked into application.yml are for running
+      # the app on the host with ./mvnw spring-boot:run.
+      MONGO_URI: mongodb://${MONGO_ROOT_USERNAME:-root}:${MONGO_ROOT_PASSWORD:-change-me}@mongodb:27017/${MONGO_DATABASE:-documents}?authSource=admin
+      OPENSEARCH_URI: http://opensearch:9200
+      SOLR_ZK_HOST: zookeeper:2181
     depends_on:
       mongodb:
         condition: service_healthy
       opensearch:
         condition: service_healthy
+      solr:
+        condition: service_healthy
 
 volumes:
   mongodb-data:
   opensearch-data:
+  zookeeper-data:
+  zookeeper-datalog:
+  solr-data:

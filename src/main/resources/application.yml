@@ -26,9 +26,23 @@ app:
     enabled: ${SAMPLE_DATA_ENABLED:true}
 
 opensearch:
+  enabled: ${OPENSEARCH_ENABLED:true}
   uri: ${OPENSEARCH_URI:http://localhost:9200}
   documents-index: ${OPENSEARCH_DOCUMENTS_INDEX:documents}
   auto-create-index: ${OPENSEARCH_AUTO_CREATE_INDEX:true}
+
+solr:
+  enabled: ${SOLR_ENABLED:true}
+  # ZooKeeper connect string, not a Solr URL. SolrJ reads the cluster state from
+  # ZooKeeper and routes requests itself, so it survives leader elections and node
+  # restarts. Append a chroot — host:2181/solr — to namespace Solr inside a shared
+  # ensemble.
+  zk-host: ${SOLR_ZK_HOST:localhost:2181}
+  collection: ${SOLR_COLLECTION:documents}
+  auto-create-collection: ${SOLR_AUTO_CREATE_COLLECTION:true}
+  shards: ${SOLR_SHARDS:1}
+  replication-factor: ${SOLR_REPLICATION_FACTOR:1}
+  connect-timeout-ms: ${SOLR_CONNECT_TIMEOUT_MS:15000}
 
 server:
   port: ${SERVER_PORT:8080}

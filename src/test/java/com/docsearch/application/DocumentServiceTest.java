@@ -7,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
@@ -23,6 +24,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,11 +38,14 @@ class DocumentServiceTest {
     @Mock
     private DocumentRepository repository;
 
+    @Mock
+    private DocumentIndexingService indexing;
+
     private DocumentService service;
 
     @BeforeEach
     void setUp() {
-        service = new DocumentService(repository, Clock.fixed(NOW, ZoneOffset.UTC));
+        service = new DocumentService(repository, indexing, Clock.fixed(NOW, ZoneOffset.UTC));
     }
 
     private static DocumentEntity storedEntity() {
@@ -185,6 +190,75 @@ class DocumentServiceTest {
         service.delete("1");
 
         verify(repository).deleteById("1");
+    }
+
+    // ---------- Day 5: projection into the search indexes ----------
+
+    @Test
+    void createIndexesTheDocumentAfterPersistingIt() {
+        echoSave();
+
+        SearchDocument created = service.create(
+                new SearchDocument(null, "t", "c", "a", "cat", List.of(), null, null));
+
+        InOrder order = inOrder(repository, indexing);
+        order.verify(repository).save(any());
+        order.verify(indexing).index(created);
+    }
+
+    @Test
+    void replaceReindexesTheDocument() {
+        when(repository.findById("1")).thenReturn(Optional.of(storedEntity()));
+        echoSave();
+
+        service.replace("1", new SearchDocument(null, "new", "c", "a", "cat", List.of(), null, null));
+
+        verify(indexing).index(any());
+    }
+
+    @Test
+    void patchReindexesTheDocument() {
+        when(repository.findById("1")).thenReturn(Optional.of(storedEntity()));
+        echoSave();
+
+        service.patch("1", new SearchDocument(null, "new", null, null, null, null, null, null));
+
+        verify(indexing).index(any());
+    }
+
+    @Test
+    void deleteRemovesFromEveryIndexAfterRemovingFromTheSourceOfTruth() {
+        when(repository.existsById("1")).thenReturn(true);
+
+        service.delete("1");
+
+        InOrder order = inOrder(repository, indexing);
+        order.verify(repository).deleteById("1");
+        order.verify(indexing).delete("1");
+    }
+
+    @Test
+    void aFailedIndexWriteDoesNotFailTheRequestOrUndoThePersist() {
+        // The index reports which projections failed rather than throwing: MongoDB already
+        // holds the document, and failing the caller would invite a duplicate on retry.
+        echoSave();
+        when(indexing.index(any())).thenReturn(List.of("solr"));
+
+        SearchDocument created = service.create(
+                new SearchDocument(null, "t", "c", "a", "cat", List.of(), null, null));
+
+        assertThat(created.id()).isNotBlank();
+        verify(repository).save(any());
+    }
+
+    @Test
+    void nothingIsIndexedWhenThePersistItselfFailed() {
+        when(repository.findById("missing")).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.replace("missing",
+                new SearchDocument(null, "t", "c", "a", "cat", List.of(), null, null)))
+                .isInstanceOf(DocumentNotFoundException.class);
+        verify(indexing, never()).index(any());
     }
 
     @Test

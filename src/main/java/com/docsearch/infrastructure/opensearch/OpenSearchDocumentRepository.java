@@ -110,6 +110,18 @@ public class OpenSearchDocumentRepository {
         return client.count(request -> request.index(index)).count();
     }
 
+    /**
+     * Removes every document but keeps the index, so the mapping and analyzer survive.
+     * Deleting the index itself would drop the Day 3 configuration and let a later write
+     * recreate it with inferred mappings.
+     */
+    public void deleteAll() throws IOException {
+        client.deleteByQuery(request -> request
+                .index(index)
+                .query(query -> query.matchAll(matchAll -> matchAll))
+                .refresh(Refresh.True));
+    }
+
     /** Indexes many documents in one round trip via the bulk API. */
     public int saveAll(List<SearchDocument> documents) throws IOException {
         if (documents.isEmpty()) {

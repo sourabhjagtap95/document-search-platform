@@ -29,10 +29,14 @@ import java.util.UUID;
 public class DocumentService {
 
     private final DocumentRepository repository;
+    private final DocumentIndexingService indexing;
     private final Clock clock;
 
-    public DocumentService(DocumentRepository repository, Clock clock) {
+    public DocumentService(DocumentRepository repository,
+                           DocumentIndexingService indexing,
+                           Clock clock) {
         this.repository = repository;
+        this.indexing = indexing;
         this.clock = clock;
     }
 
@@ -97,13 +101,26 @@ public class DocumentService {
             throw new DocumentNotFoundException(id);
         }
         repository.deleteById(id);
+        // Order matters here too: remove from the source of truth first. The reverse would
+        // leave a window where the document is gone from search but still retrievable.
+        indexing.delete(id);
     }
 
     public long count() {
         return repository.count();
     }
 
+    /**
+     * Persists to the source of truth, then projects into the search indexes.
+     *
+     * <p>Always in that order. Indexing first would allow a crash to leave a document
+     * searchable that does not exist, and a search result that 404s is worse than one that
+     * is briefly missing. An index that fails here is logged and left behind — see
+     * {@link DocumentIndexingService} for why that is not simply swallowing an error.
+     */
     private SearchDocument persist(SearchDocument document) {
-        return repository.save(DocumentEntity.fromDomain(document)).toDomain();
+        SearchDocument saved = repository.save(DocumentEntity.fromDomain(document)).toDomain();
+        indexing.index(saved);
+        return saved;
     }
 }

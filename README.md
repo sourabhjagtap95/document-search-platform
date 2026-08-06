@@ -1,8 +1,10 @@
 # Document Search Platform
 
-A document search service built with Java 21, Spring Boot 4, MongoDB and OpenSearch.
+A document search service built with Java 21, Spring Boot 4, MongoDB, OpenSearch and
+Apache Solr.
 
-MongoDB is the **source of truth**. OpenSearch is the **search index**.
+MongoDB is the **source of truth**. OpenSearch and Solr are **search indexes** — derived
+projections that can be rebuilt from MongoDB at any time.
 
 > Built incrementally over 10 days as a learning project. Each day ends with a
 > compiling project, passing tests, and a commit.
@@ -11,7 +13,8 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
 
 ## Status
 
-**Day 4 of 10 complete** — MongoDB persistence, validation and error handling.
+**Day 5 of 10 complete** — writes now reach the search indexes, and drift is visible and
+repairable.
 
 ### Completed
 
@@ -58,13 +61,29 @@ MongoDB is the **source of truth**. OpenSearch is the **search index**.
   carrying the request's correlation id
 - An out-of-range `limit` is a `400` rather than being silently clamped
 - Listing is ordered newest-first, which MongoDB can do and a `match_all` could not
-- 121 passing tests
+
+**Day 5 — index synchronisation**
+
+- Every write through the API is projected into the search indexes: `POST`, `PUT` and
+  `PATCH` index, `DELETE` removes
+- One `DocumentIndexPort` interface with two implementations, so the synchronisation logic
+  is written once — Apache Solr joins OpenSearch as a second backend
+- An index that fails to accept a write is logged and left behind rather than failing the
+  caller's request, because the document is already in the source of truth
+- `GET /api/v1/admin/index-status` exposes the resulting drift, and
+  `POST /api/v1/admin/reindex` repairs it by rebuilding from MongoDB in pages
+- Each index is written and rebuilt independently, so Solr being down cannot stop
+  OpenSearch being updated
+- The sample loader's naive dual write is gone; it goes through the same synchronisation
+  path as a request
+- 168 passing tests, and the whole suite runs with no datastores at all — both backends can
+  be switched off, which is what makes it safe in CI
 
 ### Not yet built
 
-**Writes do not reach the search index yet** — see [Where Day 4 stops](#where-day-4-stops).
-Real search — matching, filtering, sorting, aggregations — is Days 6-7. See
-[Roadmap](#roadmap).
+Real search — matching, filtering, sorting, aggregations — is Days 6-7. The indexes are
+now populated and correct; nothing queries them properly yet. See
+[Where Day 5 stops](#where-day-5-stops) and the [Roadmap](#roadmap).
 
 ---
 
@@ -75,19 +94,27 @@ Real search — matching, filtering, sorting, aggregations — is Days 6-7. See
                  │
                  ▼
         Application Service        com.docsearch.application
-                 │
-                 ▼
-          Repository Layer         com.docsearch.infrastructure
              │        │
-             ▼        ▼
-         MongoDB   OpenSearch
-      (source of    (search
-        truth)       index)
+             │        └──────────▶ DocumentIndexPort    com.docsearch.port
+             ▼                          │
+          Repository Layer         com.docsearch.infrastructure
+             │                       │        │
+             ▼                       ▼        ▼
+          MongoDB              OpenSearch    Solr
+        (source of            (search indexes — derived,
+          truth)               rebuildable projections)
 ```
 
 Supporting packages sit alongside these: `domain` for the framework-free core model,
 `config` for typed configuration, and `web` for servlet-level concerns such as
 correlation ids.
+
+**`port` exists to break a dependency cycle.** `application` needs to talk to the search
+engines, and the engine adapters live in `infrastructure` — but `application` already
+depends on `infrastructure.mongo`, so putting the interface in `application` would make the
+two packages depend on each other. A package that both may depend on, and which depends on
+neither, is the way out. `ArchitectureRulesTest` enforces both that and the absence of
+cycles, which is what caught it.
 
 **`domain` must stay framework-free.** `SearchDocument` carries no Spring, Mongo or
 OpenSearch annotations, so the same shape can be persisted to Mongo and indexed into
@@ -263,6 +290,8 @@ docker compose down -v     # also drop volumes
 | `PUT`    | `/api/v1/documents/{id}`   | Replace all fields; `createdAt` preserved       |
 | `PATCH`  | `/api/v1/documents/{id}`   | Partial update via OpenSearch `_update`         |
 | `DELETE` | `/api/v1/documents/{id}`   | Delete; 204 on success, 404 when absent         |
+| `GET`    | `/api/v1/admin/index-status` | Document counts in MongoDB and each index; `-1` = unreachable |
+| `POST`   | `/api/v1/admin/reindex`    | Rebuild every index from MongoDB (`?clear=true` drops first) |
 | `GET`    | `/api/v1/analyze`          | Tokens for a text (`?text=`, `?analyzer=`, `?field=`) |
 | `GET`    | `/api/v1/analyze/compare`  | The same text through six analyzers             |
 | `GET`    | `/api/v1/health`           | Status, application name, version, uptime       |
@@ -348,27 +377,57 @@ Design points:
   parameter, an unsupported method — and reports all of them as `500`. That bug was live
   here until a test caught it.
 
-### Where Day 4 stops
+### Where Day 5 stops
 
-MongoDB is the source of truth, and **nothing indexes yet**. A document created through
-the API is in MongoDB but not in OpenSearch:
+A document created through the API now reaches both indexes:
 
 ```text
-created: 0d7518bc…
-  in MongoDB       : 1
-  in OpenSearch    : False
-  API GET finds it : 200
+created: d162d082…
+  in MongoDB    : 1
+  in OpenSearch : True
+  in Solr       : True
 ```
 
-That asymmetry is the Day 4 boundary, and it is what makes Day 5 necessary. The sample-data
-loader does write to both, deliberately as the naive dual write that Day 5 replaces.
+And with one engine stopped, the write still succeeds — the document is safe in the source
+of truth, the healthy index is updated, and the one that fell behind is named rather than
+guessed at:
+
+```text
+POST /api/v1/documents        → 201
+GET  /api/v1/admin/index-status
+  { "sourceOfTruth": 12,
+    "indexes": { "opensearch": 12, "solr": -1 },
+    "outOfSync": [ "solr" ], "inSync": false }
+
+log: Could not index a87cb60d… in solr — this index is now behind MongoDB.
+     Repair with POST /api/v1/admin/reindex.
+```
+
+`-1` rather than `0` on purpose: "could not ask" is a different problem from "empty", with a
+different fix.
+
+**What is still missing is the query side.** The indexes are populated and analysed
+correctly, and nothing searches them properly yet — reads still go to MongoDB, so
+`GET /api/v1/documents` cannot match on text, filter, or rank. That is Days 6-7, and it is
+the point at which the indexes stop being write-only.
+
+Two smaller boundaries, both deliberate:
+
+- **Indexing is synchronous**, costing the caller a round trip per index. A queue removes
+  that at the price of a component that can itself fall behind; Day 9 is where that
+  trade-off is worth measuring rather than guessing.
+- **The admin endpoints are unauthenticated.** `reindex` is expensive, and destructive with
+  `clear=true`. Day 10 puts them behind authentication before anything is exposed beyond a
+  development machine.
 
 ### Sample data
 
-`sample-documents.json` seeds 10 documents on startup, **only when the index is
-empty** — so restarting will not duplicate them and your own edits survive. The set
-spans several authors, categories and overlapping tags, which makes the Day 6-7
-query and aggregation work possible.
+`sample-documents.json` seeds 10 documents on startup, **only when MongoDB is empty** — so
+restarting will not duplicate them and your own edits survive. MongoDB decides, not the
+index, because MongoDB is the source of truth: an empty index next to a populated MongoDB is
+drift to be repaired with `reindex`, not a reason to invent new documents. The set spans
+several authors, categories and overlapping tags, which makes the Day 6-7 query and
+aggregation work possible.
 
 ```bash
 SAMPLE_DATA_ENABLED=false ./mvnw spring-boot:run    # start clean
@@ -437,6 +496,8 @@ coordinates.
 | `mongodb`               | `mongo:7.0.39`                            | `27017`| default  | Source of truth            |
 | `opensearch`            | `opensearchproject/opensearch:3.7.0`      | `9200` | default  | Search index               |
 | `opensearch-dashboards` | `opensearchproject/opensearch-dashboards:3.7.0` | `5601` | `tools` | Dev Tools console for DSL |
+| `zookeeper`             | `zookeeper:3.9`                           | `2181` | default  | SolrCloud cluster state    |
+| `solr`                  | `solr:9.10.1`                             | `8983` | default  | Second search index        |
 | `app`                   | built from `Dockerfile`                   | `8080` | `app`    | The application itself     |
 
 Both extras are opt-in so the default stack stays lean and the normal dev loop
@@ -500,12 +561,20 @@ runs with zero configuration locally and is container/AWS friendly.
 | `OPENSEARCH_PORT`      | `9200`             | Compose     |
 | `OPENSEARCH_JAVA_OPTS` | `-Xms512m -Xmx512m`| Compose     |
 | `DASHBOARDS_PORT`      | `5601`             | Compose     |
+| `ZOOKEEPER_PORT`       | `2181`             | Compose     |
+| `SOLR_PORT`            | `8983`             | Compose     |
+| `SOLR_HEAP`            | `512m`             | Compose     |
 | `SPRINGDOC_ENABLED`    | `true`             | Spring Boot |
 | `MONGO_URI`            | local compose URI  | Spring Boot |
 | `MONGO_AUTO_INDEX_CREATION` | `true`        | Spring Boot |
 | `OPENSEARCH_URI`       | `http://localhost:9200` | Spring Boot |
 | `OPENSEARCH_DOCUMENTS_INDEX`  | `documents` | Spring Boot |
 | `OPENSEARCH_AUTO_CREATE_INDEX`| `true`      | Spring Boot |
+| `OPENSEARCH_ENABLED`   | `true`             | Spring Boot |
+| `SOLR_ENABLED`         | `true`             | Spring Boot |
+| `SOLR_ZK_HOST`         | `localhost:2181`   | Spring Boot |
+| `SOLR_COLLECTION`      | `documents`        | Spring Boot |
+| `SOLR_AUTO_CREATE_COLLECTION` | `true`      | Spring Boot |
 | `SAMPLE_DATA_ENABLED`  | `true`             | Spring Boot |
 
 ---
@@ -716,24 +785,23 @@ meant to teach.
 | 2   | MongoDB document model, OpenSearch index, basic indexing, sample data | Done |
 | 3   | Mappings, analyzers, tokenizers, text vs keyword                 | Done   |
 | 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | Done |
-| 5   | OpenSearch integration, auto-indexing, update/delete sync        | Next   |
-| 6   | Query DSL: match, bool, filter, range, pagination, sorting       | —      |
+| 5   | Index synchronisation, auto-indexing, update/delete sync, reindex | Done  |
+| 6   | Query DSL: match, bool, filter, range, pagination, sorting       | Next   |
 | 7   | Aggregations, relevance, boosting, search optimisation           | —      |
 | 8   | Shards, replicas, cluster APIs, reindex endpoint                 | —      |
 | 9   | Integration tests, performance, logging, Docker cleanup          | —      |
 | 10  | AWS-ready + production config, docs, cleanup                     | —      |
 
-### Next up — Day 5
+### Next up — Day 6
 
-Close the gap Day 4 opened. Documents written through the API land in MongoDB but never
-reach the search index, so they are retrievable by id and invisible to search.
+The indexes are populated, analysed and kept in step; nothing queries them yet. Reads still
+go to MongoDB, so the mappings and analyzers from Day 3 are not doing any work at read time.
 
-- Index automatically on create, replace and patch
-- Remove from the index on delete
-- Recover from a failed index write without losing the persisted document
-- Replace the sample loader's naive dual write with real synchronisation
-- Backfill: reindex everything already in MongoDB
+- Query DSL: `match`, `multi_match`, `bool` with `must` / `should` / `filter`
+- Range queries on `createdAt`, term filters on `category` and `tags`
+- Pagination and sorting that survive a change of backend
+- The `text` vs `keyword` distinction finally mattering: matching on analysed fields,
+  filtering on exact ones
 
-The interesting problem: two stores, one of them authoritative, and no shared transaction.
-The loader already contains the naive version — two independent writes with nothing tying
-them together — and its warning path spells out what happens when the second one fails.
+The interesting problem: query vs filter context, and where relevance scoring is worth
+paying for versus where a filter is both cheaper and more correct.

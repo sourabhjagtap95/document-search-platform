@@ -10,5 +10,10 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *                         live cluster.
  */
 @ConfigurationProperties(prefix = "opensearch")
-public record OpenSearchProperties(String uri, String documentsIndex, boolean autoCreateIndex) {
+public record OpenSearchProperties(
+        boolean enabled,
+        String uri,
+        String documentsIndex,
+        boolean autoCreateIndex
+) {
 }

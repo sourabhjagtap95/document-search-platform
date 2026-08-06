@@ -24,8 +24,15 @@
              the 2.x line targets Boot 3 and will not work here. -->
         <springdoc.version>3.0.3</springdoc.version>
         <archunit.version>1.4.2</archunit.version>
-        <!-- Spring Boot does not manage OpenSearch, so this must be pinned. -->
+        <!-- Spring Boot manages neither search client, so both must be pinned. -->
         <opensearch-java.version>3.5.0</opensearch-java.version>
+        <solr.version>9.10.1</solr.version>
+        <!-- Must match the Jetty version SolrJ is compiled against; see the dependency
+             block below for why this cannot be left to Spring Boot's management. -->
+        <jetty-for-solrj.version>10.0.26</jetty-for-solrj.version>
+        <!-- Must match the swagger-core version springdoc resolves; see the dependency
+             block below for why SolrJ otherwise wins this one. -->
+        <swagger-annotations.version>2.2.47</swagger-annotations.version>
     </properties>
 
     <dependencies>
@@ -70,6 +77,91 @@
             <groupId>org.opensearch.client</groupId>
             <artifactId>opensearch-java</artifactId>
             <version>${opensearch-java.version}</version>
+        </dependency>
+
+        <!--
+          Apache Solr, the second search backend. SolrJ talks to SolrCloud through
+          ZooKeeper rather than to a fixed node, so it follows leader elections and
+          shard moves without configuration changes.
+        -->
+        <dependency>
+            <groupId>org.apache.solr</groupId>
+            <artifactId>solr-solrj</artifactId>
+            <version>${solr.version}</version>
+        </dependency>
+        <!--
+          Separate module since Solr 9: solr-solrj carries CloudSolrClient, but the
+          ZooKeeper-backed ClusterStateProvider it needs lives here. Without it,
+          building a client from a zkHost fails at runtime, not at compile time.
+        -->
+        <dependency>
+            <groupId>org.apache.solr</groupId>
+            <artifactId>solr-solrj-zookeeper</artifactId>
+            <version>${solr.version}</version>
+        </dependency>
+
+        <!--
+          Jetty pinned to the version SolrJ is built against.
+
+          SolrJ's HTTP/2 client needs Jetty 10, and Spring Boot's dependency management
+          raises org.eclipse.jetty:* to 12 — while leaving org.eclipse.jetty.http2:* at 10,
+          because that group no longer exists in 12. The result is a mixed classpath that
+          compiles and then fails at runtime with
+          NoClassDefFoundError: org/eclipse/jetty/client/util/InputStreamResponseListener,
+          since Jetty 12 flattened the util subpackage.
+
+          Safe to pin here because this application serves HTTP with Tomcat; Jetty is only
+          ever used as SolrJ's outbound client. Revisit when SolrJ moves to Jetty 12.
+        -->
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-client</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-http</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-io</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-util</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-alpn-client</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>org.eclipse.jetty</groupId>
+            <artifactId>jetty-alpn-java-client</artifactId>
+            <version>${jetty-for-solrj.version}</version>
+        </dependency>
+
+        <!--
+          Swagger annotations raised to the version springdoc's swagger-core expects.
+
+          Same shape of problem as the Jetty pin above, in the other direction. springdoc
+          pulls swagger-core-jakarta 2.2.47, which calls Schema.$dynamicRef() — a method
+          added to the annotation in 2.2.31. SolrJ also depends on
+          swagger-annotations-jakarta, at 2.2.22, and sits one level closer to this pom, so
+          Maven's nearest-wins resolution hands the whole classpath the older annotation.
+          Nothing fails to compile; /v3/api-docs returns 500 at runtime with
+          NoSuchMethodError: Schema.$dynamicRef().
+
+          Declared directly so this pom is the nearest definition. Safe because the
+          annotations are additive and SolrJ only reads them to describe its own v2 API.
+        -->
+        <dependency>
+            <groupId>io.swagger.core.v3</groupId>
+            <artifactId>swagger-annotations-jakarta</artifactId>
+            <version>${swagger-annotations.version}</version>
         </dependency>
 
         <!-- JUnit 5, Mockito, AssertJ -->

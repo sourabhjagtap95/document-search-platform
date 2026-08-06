@@ -44,6 +44,14 @@ class ArchitectureRulesTest {
                             "org.springframework..", "com.mongodb..", "org.opensearch..");
 
     @ArchTest
+    static final ArchRule ports_must_stay_free_of_frameworks_and_adapters =
+            noClasses().that().resideInAPackage("..port..")
+                    .should().dependOnClassesThat().resideInAnyPackage(
+                            "org.springframework..", "com.mongodb..", "org.opensearch..",
+                            "org.apache.solr..", "com.docsearch.infrastructure..",
+                            "com.docsearch.api..");
+
+    @ArchTest
     static final ArchRule packages_must_be_free_of_cycles =
             slices().matching("com.docsearch.(*)..").should().beFreeOfCycles();
 

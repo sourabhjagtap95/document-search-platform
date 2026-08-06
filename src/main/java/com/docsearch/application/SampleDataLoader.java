@@ -1,9 +1,8 @@
-package com.docsearch.infrastructure;
+package com.docsearch.application;
 
 import com.docsearch.domain.SearchDocument;
 import com.docsearch.infrastructure.mongo.DocumentEntity;
 import com.docsearch.infrastructure.mongo.DocumentRepository;
-import com.docsearch.infrastructure.opensearch.OpenSearchDocumentRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,34 +21,42 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * Seeds {@code sample-documents.json} on startup so a fresh checkout has something to
- * work with. Disable with {@code app.sample-data.enabled=false}.
+ * Seeds {@code sample-documents.json} on startup so a fresh checkout has something to work
+ * with. Disable with {@code app.sample-data.enabled=false}.
  *
- * <p>MongoDB is the source of truth, so its emptiness decides whether to seed at all —
- * that keeps restarts idempotent and preserves hand-made edits.
+ * <p>MongoDB is the source of truth, so its emptiness decides whether to seed — that keeps
+ * restarts idempotent and preserves hand-made edits.
  *
- * <p>It then writes the same documents straight into the search index. That is a
- * <strong>dual write</strong>, and deliberately the naive version: two independent writes
- * with nothing tying them together. Day 5 replaces it with real synchronisation, and
- * shows how this shape drifts the moment one of the two fails.
+ * <p>Up to Day 4 this wrote to MongoDB and then straight into OpenSearch: two independent
+ * writes with nothing tying them together, and a hand-rolled warning when the second failed.
+ * It now hands the documents to {@link DocumentIndexingService}, which projects them into
+ * every configured index and reports per-index failures the same way the request path does.
+ * One place decides what a partial failure means.
+ *
+ * <p>That change is also why this class moved out of {@code infrastructure}. It now
+ * orchestrates a write to the source of truth followed by a projection into the indexes —
+ * the same job {@link DocumentService#persist} does for a request — and {@code application}
+ * is where that belongs. Left in {@code infrastructure} it would depend on
+ * {@code application} while {@code application} depends on {@code infrastructure.mongo},
+ * and {@code ArchitectureRulesTest}'s cycle check would fail the build.
  */
 @Component
 @ConditionalOnProperty(name = "app.sample-data.enabled", matchIfMissing = true)
-@Order(Ordered.LOWEST_PRECEDENCE)   // after DocumentIndexInitializer
+@Order(Ordered.LOWEST_PRECEDENCE)   // after the index and collection initializers
 public class SampleDataLoader {
 
     private static final Logger log = LoggerFactory.getLogger(SampleDataLoader.class);
     private static final String RESOURCE = "sample-documents.json";
 
     private final DocumentRepository mongo;
-    private final OpenSearchDocumentRepository index;
+    private final DocumentIndexingService indexing;
     private final ObjectMapper mapper;
 
     public SampleDataLoader(DocumentRepository mongo,
-                            OpenSearchDocumentRepository index,
+                            DocumentIndexingService indexing,
                             ObjectMapper openSearchObjectMapper) {
         this.mongo = mongo;
-        this.index = index;
+        this.indexing = indexing;
         this.mapper = openSearchObjectMapper;
     }
 
@@ -66,15 +73,14 @@ public class SampleDataLoader {
         mongo.saveAll(documents.stream().map(DocumentEntity::fromDomain).toList());
         log.info("Seeded {} sample documents into MongoDB", documents.size());
 
-        // A failure to index must not lose documents already persisted to the source of
-        // truth, so this is reported rather than propagated.
-        try {
-            index.saveAll(documents);
-            log.info("Indexed {} sample documents into OpenSearch", documents.size());
-        } catch (IOException | RuntimeException failure) {
-            log.warn("Sample documents were persisted but could not be indexed — the index "
-                    + "is now behind MongoDB. This is the drift Day 5 addresses.", failure);
-        }
+        documents.forEach(document -> {
+            List<String> failed = indexing.index(document);
+            if (!failed.isEmpty()) {
+                log.warn("Sample document {} was persisted but not indexed in {}",
+                        document.id(), failed);
+            }
+        });
+        log.info("Projected sample documents into: {}", indexing.describe());
     }
 
     private List<SearchDocument> readSampleDocuments() throws IOException {
