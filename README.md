@@ -511,6 +511,19 @@ docker compose --profile app  up -d    # run the app in a container too
 Dashboards becomes genuinely useful on Days 3, 6 and 7 for hand-testing mappings,
 analyzers and Query DSL.
 
+**Solr's Admin UI needs no profile** — it is bundled in the Solr container and is served at
+<http://localhost:8983/solr/> as soon as the default stack is up. Three tabs earn their keep:
+
+| Tab | URL | Shows |
+|---|---|---|
+| Cloud → Graph | `/solr/#/~cloud` | The collection, shard, replica and current leader — the ZooKeeper cluster state, drawn |
+| Query | `/solr/#/documents/query` | Run `*:*` and browse what is actually indexed |
+| Schema | `/solr/#/documents/schema` | Per-field types — `text_general` vs `string`, the Day 3 distinction in Solr's vocabulary |
+
+Read-only in practice: the UI's **Documents** tab can write directly into the collection, and
+doing so puts a derived index into a state MongoDB does not know about. Writes belong on the
+API, which keeps both indexes in step; see [Where Day 5 stops](#where-day-5-stops).
+
 ### Container image
 
 `Dockerfile` is multi-stage: a Maven builder plus an `eclipse-temurin:21-jre-alpine`
