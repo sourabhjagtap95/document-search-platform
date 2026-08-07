@@ -13,8 +13,8 @@ projections that can be rebuilt from MongoDB at any time.
 
 ## Status
 
-**Day 5 of 10 complete** — writes now reach the search indexes, and drift is visible and
-repairable.
+**Day 6 of 10 complete** — the indexes are queryable: matching, filtering, sorting and paging
+through one backend-neutral model, against either engine.
 
 ### Completed
 
@@ -79,11 +79,25 @@ repairable.
 - 168 passing tests, and the whole suite runs with no datastores at all — both backends can
   be switched off, which is what makes it safe in CI
 
+**Day 6 — querying**
+
+- `GET /api/v1/search`: free-text matching, exact filters, date windows, sorting, paging
+- One `SearchQuery` translated into both OpenSearch and Solr — `q`/`fq` is `must`/`filter` under
+  another name, which is why the distinction is a principle rather than a syntax quirk
+- Query context is scored, filter context is not: `score` is in the response so the difference
+  is visible rather than asserted
+- `?engine=` runs the same query against either backend for comparison
+- Highlighting shows *why* each document matched — and often highlights a different word than
+  the one typed, which is the analyzer proving it did the matching
+- An unreachable backend is a `503`, not a silent fallback to MongoDB
+- Solr gained a `titleSort` field, because it refuses to sort on the analysed `title`
+
 ### Not yet built
 
-Real search — matching, filtering, sorting, aggregations — is Days 6-7. The indexes are
-now populated and correct; nothing queries them properly yet. See
-[Where Day 5 stops](#where-day-5-stops) and the [Roadmap](#roadmap).
+Aggregations and relevance tuning are Day 7. The indexes answer questions now, but nothing
+explains *why* a document ranked where it did, and counting by category still means fetching
+and counting client-side. See [Where Day 6 stops](#where-day-6-stops) and the
+[Roadmap](#roadmap).
 
 ---
 
@@ -290,6 +304,7 @@ docker compose down -v     # also drop volumes
 | `PUT`    | `/api/v1/documents/{id}`   | Replace all fields; `createdAt` preserved       |
 | `PATCH`  | `/api/v1/documents/{id}`   | Partial update via OpenSearch `_update`         |
 | `DELETE` | `/api/v1/documents/{id}`   | Delete; 204 on success, 404 when absent         |
+| `GET`    | `/api/v1/search`           | Search the index: `?q=`, `?category=`, `?tag=`, `?author=`, `?from=`, `?to=`, `?sort=`, `?page=`, `?size=`, `?engine=` |
 | `GET`    | `/api/v1/admin/index-status` | Document counts in MongoDB and each index; `-1` = unreachable |
 | `POST`   | `/api/v1/admin/reindex`    | Rebuild every index from MongoDB (`?clear=true` drops first) |
 | `GET`    | `/api/v1/analyze`          | Tokens for a text (`?text=`, `?analyzer=`, `?field=`) |
@@ -588,6 +603,7 @@ runs with zero configuration locally and is container/AWS friendly.
 | `SOLR_ZK_HOST`         | `localhost:2181`   | Spring Boot |
 | `SOLR_COLLECTION`      | `documents`        | Spring Boot |
 | `SOLR_AUTO_CREATE_COLLECTION` | `true`      | Spring Boot |
+| `SEARCH_BACKEND`       | `opensearch`       | Spring Boot |
 | `SAMPLE_DATA_ENABLED`  | `true`             | Spring Boot |
 
 ---
@@ -799,22 +815,38 @@ meant to teach.
 | 3   | Mappings, analyzers, tokenizers, text vs keyword                 | Done   |
 | 4   | MongoDB persistence, CRUD APIs, validation, exception handling, unit tests | Done |
 | 5   | Index synchronisation, auto-indexing, update/delete sync, reindex | Done  |
-| 6   | Query DSL: match, bool, filter, range, pagination, sorting       | Next   |
-| 7   | Aggregations, relevance, boosting, search optimisation           | —      |
+| 6   | Query DSL: match, bool, filter, range, pagination, sorting       | Done   |
+| 7   | Aggregations, relevance, boosting, search optimisation           | Next   |
 | 8   | Shards, replicas, cluster APIs, reindex endpoint                 | —      |
 | 9   | Integration tests, performance, logging, Docker cleanup          | —      |
 | 10  | AWS-ready + production config, docs, cleanup                     | —      |
 
-### Next up — Day 6
+### Where Day 6 stops
 
-The indexes are populated, analysed and kept in step; nothing queries them yet. Reads still
-go to MongoDB, so the mappings and analyzers from Day 3 are not doing any work at read time.
+The indexes answer questions now. Two boundaries remain, both deliberate.
 
-- Query DSL: `match`, `multi_match`, `bool` with `must` / `should` / `filter`
-- Range queries on `createdAt`, term filters on `category` and `tags`
-- Pagination and sorting that survive a change of backend
-- The `text` vs `keyword` distinction finally mattering: matching on analysed fields,
-  filtering on exact ones
+**Relevance is untuned.** `title^3` is a starting guess, not a measured value. Nothing here
+explains *why* one document outranks another, and `_explain` is the tool for that — Day 7.
 
-The interesting problem: query vs filter context, and where relevance scoring is worth
-paying for versus where a filter is both cheaper and more correct.
+**Nothing aggregates.** "How many documents per category" still requires fetching them and
+counting client-side, which is the one thing a search engine should never be asked to do that
+way. Facets and metrics are Day 7.
+
+Two caveats worth stating rather than discovering:
+
+- **Scores are not comparable across engines.** `?engine=` shows both backends answering the
+  same *intent*. Their score numbers come from different term statistics and will differ; only
+  the result sets are meant to line up.
+- **`?engine=` is a teaching affordance.** A client should not choose infrastructure. It exists
+  so the two engines can be compared side by side, and Day 10 restricts it.
+
+### Next up — Day 7
+
+- Aggregations: `terms` buckets, nested aggregations, metrics inside buckets
+- Facet counts returned alongside results in one round trip
+- Relevance: boosting, `_explain`, and why a document scored what it did
+- `match_phrase` and fuzziness, now that scoring is on the table
+
+The interesting problem: aggregations answer questions *about* the corpus rather than returning
+documents from it, and they are computed on the analysed terms — so a field's mapping decides
+what its aggregation can even mean.
