@@ -12,6 +12,10 @@ import java.util.Map;
  */
 public record SearchHit(SearchDocument document, double score, Map<String, List<String>> highlights) {
 
+    public SearchHit {
+        highlights = highlights == null ? Map.of() : Map.copyOf(highlights);
+    }
+
     public SearchHit(SearchDocument document, double score) {
         this(document, score, Map.of());
     }

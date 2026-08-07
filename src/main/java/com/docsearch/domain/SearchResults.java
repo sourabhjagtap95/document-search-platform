@@ -13,6 +13,10 @@ import java.util.List;
 public record SearchResults(String engine, long total, int page, int size, long tookMs,
                             List<SearchHit> hits) {
 
+    public SearchResults {
+        hits = hits == null ? List.of() : List.copyOf(hits);
+    }
+
     public static SearchResults empty(String engine, int page, int size) {
         return new SearchResults(engine, 0, page, size, 0, List.of());
     }

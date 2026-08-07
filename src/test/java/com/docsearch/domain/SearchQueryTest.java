@@ -3,6 +3,7 @@ package com.docsearch.domain;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -83,5 +84,27 @@ class SearchQueryTest {
     void blankAuthorCountsAsAbsent() {
         assertThat(SearchQuery.of("x", Set.of(), Set.of(), "  ", null, null, null, 0, 20).author())
                 .isNull();
+    }
+
+    @Test
+    void canonicalConstructorGuardsNullAndAliasedCollections() {
+        // The canonical constructor, not of(), is under test here: calling it directly is the
+        // only way to bypass the factory's own null handling and prove the record guards itself.
+        SearchQuery nullCollections = new SearchQuery(
+                "x", null, null, null, null, null, SortBy.NEWEST, 0, 20, false);
+
+        assertThat(nullCollections.categories()).isEmpty();
+        assertThat(nullCollections.tags()).isEmpty();
+
+        HashSet<String> mutableCategories = new HashSet<>(Set.of("news"));
+        HashSet<String> mutableTags = new HashSet<>(Set.of("java"));
+        SearchQuery q = new SearchQuery(
+                "x", mutableCategories, mutableTags, null, null, null, SortBy.NEWEST, 0, 20, false);
+
+        mutableCategories.add("sports");
+        mutableTags.add("kotlin");
+
+        assertThat(q.categories()).containsExactly("news");
+        assertThat(q.tags()).containsExactly("java");
     }
 }

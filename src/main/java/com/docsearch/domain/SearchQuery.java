@@ -12,7 +12,8 @@ import java.util.Set;
  * OpenSearch and Solr can be asked to honour.
  *
  * <p>Build with {@link #of}, which applies the defaulting rules. The canonical constructor is
- * deliberately dumb so the rules live in exactly one place.
+ * deliberately dumb about defaulting — that stays in {@link #of} so the rules live in exactly one
+ * place — but it still guarantees non-null, immutable {@code categories} and {@code tags}.
  *
  * @param text          free-text query, or {@code null}
  * @param categories    exact category values; any match (OR)
@@ -37,6 +38,12 @@ public record SearchQuery(
 
     public static final int DEFAULT_SIZE = 20;
     public static final int MAX_SIZE = 100;
+
+    /** Guards against {@code null} and aliased collections regardless of which constructor is used. */
+    public SearchQuery {
+        categories = categories == null ? Set.of() : Set.copyOf(categories);
+        tags = tags == null ? Set.of() : Set.copyOf(tags);
+    }
 
     public static SearchQuery of(String text,
                                  Set<String> categories,
