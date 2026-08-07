@@ -31,3 +31,10 @@ logs/
 # --- Local tooling artifacts (not part of the project) ---
 graphify-out/
 codedb.snapshot
+
+# --- Working notes ---
+# docs/ holds teaching notes, study plans and design specs written for people, not
+# artefacts of the build. They stay local. opensearch-queries.md is the exception: it
+# documents the index itself and is part of the project.
+docs/*
+!docs/opensearch-queries.md
