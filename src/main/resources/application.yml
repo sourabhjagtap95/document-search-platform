@@ -44,6 +44,13 @@ solr:
   replication-factor: ${SOLR_REPLICATION_FACTOR:1}
   connect-timeout-ms: ${SOLR_CONNECT_TIMEOUT_MS:15000}
 
+search:
+  # Which engine answers a search when the request does not say. Both are kept in step by
+  # the indexing path, so this is a genuine choice rather than a primary/secondary split.
+  # A request may override it with ?engine=, which exists so the two can be compared
+  # side by side; Day 10 restricts that.
+  backend: ${SEARCH_BACKEND:opensearch}
+
 server:
   port: ${SERVER_PORT:8080}
 
