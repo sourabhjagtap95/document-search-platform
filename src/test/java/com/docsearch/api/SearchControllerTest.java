@@ -148,6 +148,19 @@ class SearchControllerTest {
     }
 
     @Test
+    void theDocumentedLowercaseSortSpellingIsTheOneThatMustWork() throws Exception {
+        // Spring's built-in enum converter matches the constant name exactly, so without a
+        // converter of our own `?sort=title` — the spelling the endpoint documents — is a 400
+        // while only `TITLE` works. That is the worst way round, so it is asserted separately.
+        when(service.search(any(), nullable(String.class))).thenReturn(oneHit());
+
+        mockMvc.perform(get("/api/v1/search").param("sort", "title"))
+                .andExpect(status().isOk());
+
+        assertThat(captureQuery().sort()).isEqualTo(SortBy.TITLE);
+    }
+
+    @Test
     void theEngineParamIsPassedThroughUntouched() throws Exception {
         when(service.search(any(), nullable(String.class))).thenReturn(oneHit());
 
