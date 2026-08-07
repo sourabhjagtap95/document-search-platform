@@ -138,6 +138,9 @@ public class SolrDocumentIndexer implements DocumentIndexPort {
         SolrInputDocument solrDocument = new SolrInputDocument();
         solrDocument.addField("id", document.id());
         solrDocument.addField("title", document.title());
+        // Solr will not sort on the analysed `title`, so an exact copy is written for that
+        // purpose alone — the counterpart of OpenSearch's title.keyword sub-field.
+        solrDocument.addField("titleSort", document.title());
         solrDocument.addField("content", document.content());
         solrDocument.addField("author", document.author());
         solrDocument.addField("category", document.category());

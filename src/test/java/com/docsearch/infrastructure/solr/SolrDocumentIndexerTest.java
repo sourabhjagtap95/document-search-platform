@@ -5,13 +5,17 @@ import com.docsearch.domain.SearchDocument;
 import com.docsearch.port.IndexingException;
 import org.apache.solr.client.solrj.SolrClient;
 import org.apache.solr.client.solrj.SolrRequest;
+import org.apache.solr.client.solrj.request.UpdateRequest;
 import org.apache.solr.common.SolrException;
+import org.apache.solr.common.SolrInputDocument;
 import org.apache.solr.common.util.NamedList;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -95,5 +99,36 @@ class SolrDocumentIndexerTest {
         assertThatThrownBy(() -> indexer().count())
                 .isInstanceOf(IndexingException.class)
                 .hasMessageContaining("[solr]");
+    }
+
+    @Test
+    void everyIndexedDocumentCarriesAnUnanalysedTitleForSorting() throws Exception {
+        // Solr refuses to sort on the analysed `title` field, so an exact companion has to be
+        // written alongside it. OpenSearch got this free from the Day 3 mapping's .keyword
+        // sub-field; Solr makes you ask.
+        AtomicReference<SolrInputDocument> captured = new AtomicReference<>();
+
+        SolrClient capturingClient = new SolrClient() {
+            @Override
+            public NamedList<Object> request(SolrRequest<?> request, String collection) {
+                if (request instanceof UpdateRequest update && update.getDocuments() != null
+                        && !update.getDocuments().isEmpty()) {
+                    captured.compareAndSet(null, update.getDocuments().get(0));
+                }
+                return new NamedList<>();
+            }
+
+            @Override
+            public void close() {
+            }
+        };
+
+        new SolrDocumentIndexer(capturingClient,
+                new SolrProperties(true, "localhost:2181", "documents", true, 1, 1, 15_000))
+                .index(DOC);
+
+        assertThat((Object) captured.get()).as("an update carrying the document was sent").isNotNull();
+        assertThat(captured.get().getFieldValue("titleSort")).isEqualTo("t");
+        assertThat(captured.get().getFieldValue("title")).isEqualTo("t");
     }
 }

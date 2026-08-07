@@ -34,6 +34,12 @@ import java.util.stream.Collectors;
  * searched, {@code string} where a value is filtered or faceted on. Solr calls the second
  * one {@code string} rather than {@code keyword}, but it is the same idea — stored verbatim,
  * not broken into words.
+ *
+ * <p>{@code titleSort} has no counterpart in the OpenSearch mapping because it does not need
+ * one: OpenSearch's {@code title} carries a {@code .keyword} sub-field, and sorting simply
+ * targets that. Solr has no sub-fields, so the exact copy is declared as its own field.
+ * Note this is an additive schema change, so it is safe on a live collection — but existing
+ * documents will not have the field until they are reindexed.
  */
 @Component
 // Both names must match, which is what @ConditionalOnProperty does with a list. Gating only
@@ -50,6 +56,7 @@ public class SolrCollectionInitializer {
 
     static {
         FIELDS.put("title", "text_general");     // prose, analyzed
+        FIELDS.put("titleSort", "string");        // exact copy of title, for sorting only
         FIELDS.put("content", "text_general");   // prose, analyzed
         FIELDS.put("author", "string");          // exact: grouped and filtered
         FIELDS.put("category", "string");        // exact: filtered and faceted
