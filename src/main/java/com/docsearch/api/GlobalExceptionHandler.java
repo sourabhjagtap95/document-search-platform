@@ -1,6 +1,8 @@
 package com.docsearch.api;
 
 import com.docsearch.application.DocumentNotFoundException;
+import com.docsearch.application.UnknownSearchBackendException;
+import com.docsearch.port.IndexingException;
 import com.docsearch.web.CorrelationIdFilter;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -86,6 +88,45 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
                 "The request has %d invalid value(s)".formatted(errors.size()), "validation-failed");
         problem.setProperty("errors", errors);
         return problem;
+    }
+
+    /**
+     * The search backend could not answer.
+     *
+     * <p>{@code 503} rather than an empty {@code 200}, and with no fallback to MongoDB. This
+     * inverts the write path's answer from the same premise: a failed index write is tolerated
+     * because MongoDB still holds the document, but MongoDB cannot answer a search at all — no
+     * analyzer, no stemming, no scoring. Falling back would answer a different question and
+     * present it as this one's answer, and silently wrong results are worse than an error.
+     *
+     * <p>This is the first path on which {@code IndexingException} reaches the API layer; on the
+     * write path {@code DocumentIndexingService} always catches it.
+     */
+    @ExceptionHandler(IndexingException.class)
+    public ProblemDetail handleSearchUnavailable(IndexingException exception) {
+        log.error("Search backend unavailable", exception);
+        // The cause can carry connection strings and internal hostnames, so it is logged and
+        // not echoed.
+        return problem(HttpStatus.SERVICE_UNAVAILABLE, "Search unavailable",
+                "The search index could not be queried. The documents themselves are unaffected.",
+                "search-unavailable");
+    }
+
+    /** A request named a backend that does not exist — the caller's mistake, so {@code 400}. */
+    @ExceptionHandler(UnknownSearchBackendException.class)
+    public ProblemDetail handleUnknownBackend(UnknownSearchBackendException exception) {
+        ProblemDetail problem = problem(HttpStatus.BAD_REQUEST, "Unknown search backend",
+                exception.getMessage(), "unknown-search-backend");
+        problem.setProperty("requested", exception.requested());
+        problem.setProperty("available", exception.available());
+        return problem;
+    }
+
+    /** A parameter combination that cannot be satisfied — for example an inverted date window. */
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ProblemDetail handleIllegalArgument(IllegalArgumentException exception) {
+        return problem(HttpStatus.BAD_REQUEST, "Invalid request parameter",
+                exception.getMessage(), "invalid-parameter");
     }
 
     /**
